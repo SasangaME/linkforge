@@ -3,6 +3,10 @@
 *.tfstate.*
 *.tfstate.backup
 
+# Plan files — binary, derived, and contain full state values in plaintext.
+*.tfplan
+tfplan
+
 # Provider binaries and module cache — downloaded, not source.
 .terraform/
 .terragrunt-cache/
@@ -18,3 +22,6 @@ crash.*.log
 
 # macOS
 .DS_Store
+
+# Local working notes — personal scratch, not part of the deliverable.
+*.local.md
