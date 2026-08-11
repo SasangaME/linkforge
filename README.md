@@ -12,7 +12,28 @@ Three endpoints.
 | `GET /{code}` | 302-redirects to the long URL, emits a click event |
 | `GET /links/{code}/stats` | Returns click counts, referrers, geography |
 
-That is about 150 lines of application code in any language. It is boring on purpose. The application is never the subject of this project — the resource graph around it is.
+That is about 150 lines of Python. It is boring on purpose. The application is never the subject of this project — the resource graph around it is.
+
+## When the application gets written
+
+`v2-fargate`. That is the first milestone with ECR and ECS, and a registry with no image to store and a scheduler with no task to run are not worth building. Before that, `v1-network` proves out private subnets and SSM access against a host that answers `/health` and nothing else.
+
+The code then arrives in the order the infrastructure can support it:
+
+| Milestone | The application | Built by |
+| --- | --- | --- |
+| `v2-fargate` | `/health` plus a redirect from an in-memory map | `docker build` on your machine |
+| `v3-pipeline` | Unchanged — what moves is the build | GitHub Actions, on merge |
+| `v4-state` | The three real endpoints, backed by DynamoDB | GitHub Actions |
+| `v6-events` | The redirect stops writing click data inline | GitHub Actions |
+
+It stays a stub until `v4-state` for an honest reason: there is no store to write to, so `POST /links` cannot persist anything before then. And the `v6-events` change is the only one carrying real design weight — the redirect has to stay fast, so the click write comes off the request path and onto a queue.
+
+Building more application than the infrastructure can currently serve is exactly the failure mode this ordering exists to prevent.
+
+The application is Python. The framework choice is deferred to `v2-fargate` and matters in four ways only: it must expose a `/health` route for the ALB target group, listen on the port the task definition declares, be async (the redirect blocks on DynamoDB, and a sync worker blocks everything else with it), and run as a single process per container so CPU stays a clean autoscaling signal. The container image is the real interface between the application and everything in this repository — nothing downstream of ECR knows or cares what is inside it, which is also what makes a later change of language cheap.
+
+Scaling is horizontal and lives in the infrastructure, not the app. On ECS that means service auto scaling — `aws_appautoscaling_target` with a target-tracking policy on service CPU or the ALB's `RequestCountPerTarget`. It is the same idea as a Kubernetes HPA, but a different resource with a different API; there is no HPA outside Kubernetes, and this project deliberately stays on ECS. The only thing the application owes horizontal scale is statelessness, which is why the in-memory map at `v2-fargate` is a stub and `v4-state` is where replicas become genuinely interchangeable.
 
 ## Why this product and not a to-do app
 
