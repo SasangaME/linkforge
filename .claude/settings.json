@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/sasangaedirisinghe/Desktop/dev/devops/**)",
+      "Read(//Users/sasangaedirisinghe/Desktop/dev/devops/flagship-projects/**)",
+      "Bash(cd /Users/sasangaedirisinghe/Desktop/dev/devops/ecs/aws-ecs-fargate-terraform && head -60 ROADMAP.md 2>/dev/null; echo \"===README===\"; head -40 README.md)",
+      "Read(//Users/sasangaedirisinghe/Desktop/dev/devops/ecs/aws-ecs-fargate-terraform/**)"
+    ]
+  }
+}
