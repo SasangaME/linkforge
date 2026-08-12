@@ -80,7 +80,7 @@ The application does not change for scale. It must only be stateless. Milestone 
 
 | Tag | Status |
 | --- | --- |
-| `v0-bootstrap` | Not started |
+| `v0-bootstrap` | In progress |
 | `v1-network` | Not started |
 | `v2-fargate` | Not started |
 | `v3-pipeline` | Not started |
