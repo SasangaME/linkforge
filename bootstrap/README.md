@@ -4,16 +4,18 @@ This directory has one Terraform module. The module makes the S3 bucket that hol
 
 Apply this module first. No other module in this repository can work before this bucket exists.
 
-## Why the module starts with local state
+## Why the module started with local state
 
-A Terraform module usually keeps its state in a remote backend. This module cannot do this at the start. The backend is the S3 bucket, and the bucket does not exist yet.
+A Terraform module usually keeps its state in a remote backend. This module could not do this at the start. The backend is the S3 bucket, and the bucket did not exist yet.
 
-Thus the work has two parts:
+Thus the work had two parts:
 
-1. Apply this module with local state. This makes the bucket.
-2. Add a `backend "s3"` block. Then move the state into the new bucket.
+1. Apply this module with local state. This makes the bucket. ✅
+2. Add a `backend "s3"` block. Then move the state into the new bucket. ✅
 
-After part 2, the module keeps its own state in the bucket that it made.
+Both parts are complete. The module now keeps its own state in the bucket that it made, at the key `bootstrap/terraform.tfstate`.
+
+This sequence happens one time only. Every module after this one has a backend from the first day, because the bucket already exists.
 
 ## What the module makes
 
@@ -68,11 +70,34 @@ A `backend` block cannot read an output. Terraform reads the `backend` block bef
 
 The output `state_bucket_arn` has a different function. The IAM policies of the GitHub OIDC roles need this ARN. Those roles read the ARN from the state of this module.
 
+## The backend block
+
+The block is in `versions.tf`, inside the `terraform` block. A `backend` block is not a top-level block. It configures Terraform, and not a provider, thus it goes inside `terraform`. A directory accepts one backend block only. This is the reason that one directory has one state file.
+
+| Argument | Value | Function |
+| --- | --- | --- |
+| `bucket` | `linkforge-tfstate-749000381089` | Plain text. The block cannot read an expression |
+| `key` | `bootstrap/terraform.tfstate` | The path of the object in the bucket |
+| `region` | `us-east-1` | The region of the bucket, and not the region of the provider |
+| `profile` | `dev` | The backend reads its credentials separately from the provider block |
+| `use_lockfile` | `true` | S3 gives the lock. This is the reason that the block has no `dynamodb_table` |
+| `encrypt` | `true` | Terraform sends the encryption header |
+
+Two arguments need more explanation.
+
+The argument `profile` looks unnecessary, because `providers.tf` already gives the same profile. The backend does not read the provider block. Terraform configures the backend before it starts the provider plugin, thus the two read their credentials separately. Without this argument, `terraform init` uses the default credentials.
+
+The argument `encrypt` also looks unnecessary, because `aws_s3_bucket_server_side_encryption_configuration` already encrypts each object. That resource is correct, and the object is encrypted without this argument. The argument makes the intention visible in the file that the reader examines, and not in a different file.
+
+The value of `key` is a choice for the future. Terragrunt makes this argument from `path_relative_to_include()`. A module at `live/dev/network` thus gets the key `dev/network/terraform.tfstate`. The value `bootstrap/terraform.tfstate` has the same shape.
+
+WARNING: Two modules must never use one key. The key is the identity of a state file. Two modules with one key each delete the resources of the other module.
+
 ## The files
 
 ```
 bootstrap/
-├── versions.tf   # The terraform block. Terraform 1.10 or later, AWS provider 6.x
+├── versions.tf   # The terraform block. Terraform 1.10 or later, AWS provider 6.x, the S3 backend
 ├── providers.tf  # The provider block. The region and the default tags
 ├── main.tf       # The two data sources and the six resources
 ├── outputs.tf    # The name and the ARN of the bucket
@@ -82,6 +107,10 @@ bootstrap/
 Terraform reads all `.tf` files in the directory together. The division into four files is a convention for the reader. Terraform does not use the name of the file or the sequence of the blocks.
 
 ## How to apply the module
+
+The module is applied, and its state is in the bucket. Thus you do not repeat this sequence. It is here because it is the sequence that made the bucket, and because no later module can repeat it.
+
+A new copy of this repository does not need these steps. There `terraform init` reads the backend block, finds the state in S3, and the module is ready.
 
 Do the steps in this sequence. Run all commands in the `bootstrap` directory.
 
@@ -132,6 +161,20 @@ Then make sure that Git is clean:
 git status   # terraform.tfstate, .terraform/ and *.tfplan must not be in the list
 ```
 
+## How to check the backend
+
+Run these commands after `terraform init -migrate-state`.
+
+```bash
+aws s3api list-objects-v2 --bucket linkforge-tfstate-749000381089   # one object at the key
+terraform plan                                                     # "No changes"
+terraform state list                                               # the 8 items, now from S3
+```
+
+The plan is the important check. A state file that is not complete still gives a result for `terraform state list`. A plan with no changes is the proof that the move lost nothing.
+
+The lock is not in this list, because you cannot see it after the event. Terraform makes the object `bootstrap/terraform.tfstate.tflock` at the start of an operation, and removes it at the end. To see the lock, list the bucket from a second terminal during an apply. The line `Releasing state lock` at the end of a plan is the simpler proof.
+
 ## Warning about deletion
 
 The `aws_s3_bucket` resource has the argument `prevent_destroy = true`.
@@ -150,10 +193,8 @@ The argument also stops all changes that replace the bucket. An example is a cha
 
 ## Next step
 
-Add a `backend "s3"` block to this module. Give the block the bucket name, the key `bootstrap/terraform.tfstate`, the region, and `use_lockfile = true`. Then move the state:
+This module is complete. The next step of `v0-bootstrap` is the GitHub OIDC provider, and it is not in this directory.
 
-```bash
-terraform init -migrate-state
-```
+That step reads `state_bucket_arn` from the state of this module. The plan role and the apply role need write access to the state, thus their policies need the ARN of the bucket and the same ARN with `/*` at the end. This is the same division of the bucket plane and the object plane as the bucket policy above.
 
-After this command, the module holds its own state in the bucket that it made.
+One known fault waits in that step. The file `providers.tf` gives `profile = "dev"`, and the backend block gives the same value. GitHub Actions has no profile. A job there receives its credentials from the role that it assumes, in the environment. Both values must become conditional before a workflow can run this module. This fault is the same class as the absent `region` argument earlier: the code works on one machine, because that machine has configuration that the code does not state.

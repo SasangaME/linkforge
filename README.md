@@ -61,7 +61,9 @@ See [ROADMAP.md](ROADMAP.md) for the milestone list and current status.
 
 `v0-bootstrap` is in progress.
 
-The repository holds one Terraform module, [bootstrap/](bootstrap/). It defines the S3 bucket that every later module stores its state in: versioned so a bad apply is recoverable, encrypted, closed to public access, denying any request that does not arrive over TLS, and expiring noncurrent versions after ninety days. The module runs on local state, because the backend it would otherwise use is the thing it is creating. Its own state moves into that bucket immediately afterward.
+The repository holds one Terraform module, [bootstrap/](bootstrap/), and it is applied. It defines the S3 bucket that every later module stores its state in: versioned so a bad apply is recoverable, encrypted, closed to public access, denying any request that does not arrive over TLS, and expiring noncurrent versions after ninety days. Locking is S3's own, not a DynamoDB table — the table was the only option until Terraform 1.10, and the argument that configures one has been deprecated since 1.11.
+
+The module was applied on local state, because the backend it would otherwise use was the thing it was creating. That state has since moved into the bucket, so the module now records itself in the object store it brought into existence. This bootstrapping step happens exactly once in the life of the repository; every module after it has a backend from its first line.
 
 The rest of the milestone is the shared foundation that no later milestone wants to build twice — a GitHub OIDC provider with separate plan and apply roles, so that nothing in this repository ever holds a long-lived AWS key; a billing budget, because a project that stands infrastructure up daily should say so out loud when it costs more than expected; an account baseline; and a workflow that runs `fmt`, `validate`, and `plan` on every pull request.
 

@@ -22,13 +22,17 @@ These two operations have a strict order. A tag key appears in the Billing conso
 | 3 | The four tag keys appear in the Billing console | Up to 24 hours |
 | 4 | Activate the four tag keys | Up to 24 hours |
 
+Step 2 is done. The `bootstrap` module is applied, and its six resources carry the four tags. Thus steps 1, 3, and 4 remain, and step 1 is the one that holds the rest.
+
 Thus the time from step 1 to a tagged bill is up to three days. Start the sequence early. Milestone `v1-network` creates the first resources with a large cost, and you cannot tag that cost after the fact.
 
 ## Operation 1: Enable Cost Explorer
 
 **Reason.** Cost Explorer holds the cost history of the project. It also controls the cost allocation tags. The tag keys do not appear in the Billing console until Cost Explorer is active.
 
-**When.** Now. Do this before you apply the `bootstrap` module.
+**When.** Now, and the correct time has passed. The plan was to do this before the apply of the `bootstrap` module. That module is applied, thus the sequence below has started late.
+
+This is not a fault that you can repair. Cost Explorer collects no data from the past. The cost of `bootstrap` is about $0, thus the loss is nothing. The condition is now urgent for a different reason: the four tag keys cannot appear until Cost Explorer is active, and the two waits after that are up to 24 hours each. Milestone `v1-network` makes the first resources with a real cost.
 
 **Steps.**
 
