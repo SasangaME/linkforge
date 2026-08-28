@@ -8,8 +8,8 @@ An operation in this file has three parts: the reason for it, the correct time t
 
 | Operation | Milestone | Status |
 | --- | --- | --- |
-| Enable Cost Explorer | `v0-bootstrap` | Not done |
-| Activate the cost allocation tags | `v0-bootstrap` | Not done |
+9| Enable Cost Explorer | `v0-bootstrap` | Done |
+| Activate the cost allocation tags | `v0-bootstrap` | Done, 2026-08-28 |
 
 ## The correct sequence
 
@@ -22,17 +22,17 @@ These two operations have a strict order. A tag key appears in the Billing conso
 | 3 | The four tag keys appear in the Billing console | Up to 24 hours |
 | 4 | Activate the four tag keys | Up to 24 hours |
 
-Step 2 is done. The `bootstrap` module is applied, and its six resources carry the four tags. Thus steps 1, 3, and 4 remain, and step 1 is the one that holds the rest.
+All four steps are complete. The sequence closed on 2026-08-28, before milestone `v1-network` created any resource with a real cost. No wait remains.
 
-Thus the time from step 1 to a tagged bill is up to three days. Start the sequence early. Milestone `v1-network` creates the first resources with a large cost, and you cannot tag that cost after the fact.
+The warning that this section carried is now spent, but keep it in mind for `v9-govern`. The sequence takes up to three days from a cold start, and you cannot tag a cost after the fact.
 
 ## Operation 1: Enable Cost Explorer
 
 **Reason.** Cost Explorer holds the cost history of the project. It also controls the cost allocation tags. The tag keys do not appear in the Billing console until Cost Explorer is active.
 
-**When.** Now, and the correct time has passed. The plan was to do this before the apply of the `bootstrap` module. That module is applied, thus the sequence below has started late.
+**When.** Done. Cost Explorer is active on account `749000381089`.
 
-This is not a fault that you can repair. Cost Explorer collects no data from the past. The cost of `bootstrap` is about $0, thus the loss is nothing. The condition is now urgent for a different reason: the four tag keys cannot appear until Cost Explorer is active, and the two waits after that are up to 24 hours each. Milestone `v1-network` makes the first resources with a real cost.
+The date of the activation is not recorded, and Cost Explorer does not report it. The service holds cost data for August 2026, thus it was active at least from the start of that month. This covers the whole life of the `bootstrap` module, so no cost of this project is missing from the history.
 
 **Steps.**
 
@@ -42,13 +42,24 @@ This is not a fault that you can repair. Cost Explorer collects no data from the
 
 **Check.** Open Cost Explorer again. The console must show a report page, and not the start page.
 
+The CLI gives a stronger check, because it tests the service and not the console:
+
+```bash
+aws ce get-cost-and-usage --time-period Start=2026-08-01,End=2026-08-28 \
+  --granularity MONTHLY --metrics UnblendedCost
+```
+
+An account without Cost Explorer returns `DataUnavailableException`. An account with it returns an amount. This account returns an amount.
+
 **Note.** Cost Explorer collects data from the day you enable it. It does not show the cost from before that day.
 
 ## Operation 2: Activate the cost allocation tags
 
 **Reason.** The `bootstrap` module applies four tags to each resource: `Project`, `Environment`, `ManagedBy`, and `Milestone`. These tags do not divide the bill until you activate them. The `Milestone` tag is the important one. It makes the bill show the cost of each milestone.
 
-**When.** After the tag keys appear in the console. This is up to 24 hours after you apply the `bootstrap` module.
+**When.** Done, on 2026-08-28.
+
+The activation happened in two parts, which is worth knowing because the first part looked complete and was not. `Project` and `ManagedBy` were activated on 2026-08-14. `Environment` and `Milestone` were left inactive and were found only by a later check. `Milestone` is the key that this operation exists for. A partial activation reports no error and shows no symptom until you read a bill that cannot break the cost down.
 
 **Conditions.** Two conditions must be true before you start:
 
@@ -70,7 +81,9 @@ This is not a fault that you can repair. Cost Explorer collects no data from the
 aws ce list-cost-allocation-tags --status Active
 ```
 
-The result must contain the four tag keys.
+The result must contain the four tag keys. It does.
+
+Note the price. Each request to the Cost Explorer API costs $0.01. The console is free, and so are the tags themselves. Thus a check of this kind is correct once, by hand, and wrong in a loop, a dashboard, or a scheduled job. The budget in step 5 is the free path to the same knowledge, because it pushes a notification instead of asking a question.
 
 **Note.** The activation applies only to future cost. AWS does not apply a tag to the cost from before the activation. If the four keys do not appear in the console, the cause is almost always one of the two conditions above.
 
