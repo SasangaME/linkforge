@@ -59,7 +59,11 @@ See [ROADMAP.md](ROADMAP.md) for the milestone list and current status.
 
 ## What exists today
 
-`v0-bootstrap` is in progress. The repository holds two applied Terraform modules and the skeleton of the per-environment layout that every later milestone fills in.
+`v0-bootstrap` closed on 2026-08-29 and `v1-network` is in progress. What is *applied* is still only what `v0-bootstrap` applied: the state bucket and the account configuration. The network is written and unbuilt, which is a distinction this repository has learned to make out loud.
+
+### `v0-bootstrap`, closed
+
+Two applied root modules, the pipeline that proves their identities work, and the skeleton of the per-environment layout that every later milestone fills in.
 
 [bootstrap/](bootstrap/) defines the S3 bucket that every later module stores its state in: versioned so a bad apply is recoverable, encrypted, closed to public access, denying any request that does not arrive over TLS, and expiring noncurrent versions after ninety days. Locking is S3's own, not a DynamoDB table — the table was the only option until Terraform 1.10, and the argument that configures one has been deprecated since 1.11.
 
@@ -81,7 +85,7 @@ It plans `bootstrap/` rather than `account/`. `bootstrap/` takes no variables an
 
 [live/](live/) and [modules/](modules/) are the shape of everything after this milestone: a module holds a resource graph with no environment name in it, and one directory per environment per stack supplies the arguments. Three environments are defined — `dev`, `stage`, `prod` — and one is built.
 
-That asymmetry is a cost decision made before the first apply rather than after it. Three copies of `v1-network` is roughly $150 a month standing against a $10 budget, so `dev` reaches AWS through interface endpoints instead of a NAT gateway — two thirds cheaper, though the load balancer keeps it above the budget and so still on the daily destroy — while `stage` and `prod` exist as configuration that is checked on every pull request and never applied. What keeps them unbuilt is not a comment: their GitHub Environments do not exist, so GitHub will not mint a token naming them, so their IAM roles cannot be assumed by anyone. Writing all three now fixes the addressing and the module interface while both are still free to change; a CIDR cannot be corrected without destroying the VPC that carries it.
+That asymmetry is a cost decision made before the first apply rather than after it. Three copies of `v1-network` is roughly $150 a month standing against a $10 budget, so `dev` reaches AWS through interface endpoints in a single zone instead of a NAT gateway — about $22 a month against $33, and the load balancer keeps it above the budget either way, so it stays on the daily destroy — while `stage` and `prod` exist as configuration that is checked on every pull request and never applied. What keeps them unbuilt is not a comment: their GitHub Environments do not exist, so GitHub will not mint a token naming them, so their IAM roles cannot be assumed by anyone. Writing all three now fixes the addressing and the module interface while both are still free to change; a CIDR cannot be corrected without destroying the VPC that carries it.
 
 A merge to `main` reaches dev; a `release/x.xx` branch cut from main reaches stage and then prod, with a required reviewer on the last step. That routing is not in this repository and cannot be. A job that declares an environment receives a subject claim naming the environment and not the ref — the environment replaces the branch segment rather than joining it — so there is no branch left in the token for an IAM condition to test. Everywhere else here GitHub asserts and IAM verifies; this is the one control where IAM has nothing to check, and the deployment branch policy is the enforcement rather than a convenience.
 
@@ -93,10 +97,34 @@ The password policy is the honest outlier. The account holds one IAM user, it is
 
 It is also the clearest illustration of why `account/` is applied by hand: the permanent deny on identity mutation that every OIDC role carries includes `iam:Update*`, so no CI role in this project can set an account password policy, by construction.
 
-`v0-bootstrap` is done when a pull request can plan against remote state using credentials that exist only for the life of the job.
+`v0-bootstrap` was done when a pull request could plan against remote state using credentials that exist only for the life of the job, and it closed on 2026-08-29 having done exactly that.
+
+The lesson it closed on is worth carrying, because everything below is subject to it. A merged pull request is not an apply. `account/` is hand-applied by design, so no job in this repository plans it, so merging the account baseline changed nothing in AWS and nothing anywhere said so — green checks, clean tree, three settings still unset for a day. It was found by calling the three APIs and reading back `NoSuchPublicAccessBlockConfiguration`, `false` and `NoSuchEntity`. For a hand-applied module the repository is a statement of intent and only the service API says what is true.
 
 A few operations have no Terraform resource and no API worth automating: enabling Cost Explorer, activating cost allocation tags, answering an SNS confirmation mail, handing the workflow its role ARN. Those live in [RUNBOOK.md](RUNBOOK.md), each with the reason for it, the moment to do it, and a check — because a manual step has no plan output to read.
 
+### `v1-network`, in progress
+
+[modules/](modules/) now holds the first two module definitions, and nothing calls either of them. That is the honest status: they are written, formatted, and checked by `terraform validate` on every pull request, and no resource described below exists in the account. The stacks under `live/` that would build them are step 6.
+
+[modules/network/](modules/network/) is the VPC, its subnets, and everything that decides where a packet goes — one module for all three environments, because a staging environment that differs from production in its code rather than in its arguments is not testing production. The three environments differ in exactly one dimension, which is what is allowed to cost money while idle, and that difference arrives as three numbers: how many zones, how many NAT gateways, how many zones get interface endpoints. The last two default to zero together and the module rejects that combination, because an environment with neither has no route from its private subnets to the AWS APIs and it is a mistake that applies cleanly, builds every resource, and leaves every instance unreachable with nothing in the plan to say so.
+
+Subnet addresses are derived from the VPC CIDR rather than passed in, with a subnet width that is a constant and not a function of the zone count. The obvious version — enough bits for exactly the zones in use — works, and then the day a third zone is added every subnet is re-derived at a new address and Terraform destroys and recreates all of them along with anything holding an address in them.
+
+The interesting thing in that module is a claim that turned out to be false. `dev` reaches the AWS APIs through interface endpoints instead of a NAT gateway, and this project used to describe that as removing the single largest hourly cost in the milestone. An interface endpoint is billed for every zone it is placed in, and the endpoints had never been added to the figure: three of them across two zones is about $44 a month against a NAT gateway's $33, which made the environment that was on paper the cheapest into the most expensive one in the project. What repairs it is placing `dev`'s endpoints in a single zone, about $22, while the subnets stay in two because a load balancer will not accept one and a subnet is free. The price of that is not money — a fault in that zone costs `dev` its SSM access entirely, which is the right trade in an environment rebuilt daily and the wrong one anywhere else.
+
+[modules/ssm-host/](modules/ssm-host/) is one instance in a private subnet that answers `/health` and nothing else. Its purpose is to prove the network rather than to run anything: a machine with no public address, no key pair and no inbound rule of any kind, reachable anyway. The security group has no ingress rule — not a narrow one, none — and reachability comes from the instance profile, because the agent dials out to Session Manager and the session runs back down the connection the host itself opened. Access here is an IAM decision, not a network one.
+
+Its egress is where the environments part company, and the shape of that is worth stating because it inverts the cost table. With interface endpoints the far end of the connection is an ENI inside the VPC, so the rule names a security group. With a NAT gateway the far end is the public internet and a rule can name nothing but a CIDR. The environment that pays for the NAT gateway ends up with the looser egress rule and the cheap one ends up with the tighter.
+
+The role and instance profile that host assumes are in [account/](account/) and not in the module, and that placement was found rather than chosen: every CI apply role carries a permanent deny on `iam:Create*`, `iam:Attach*` and `iam:Add*`, which covers creating a role and creating an instance profile. A stack that made its own would apply from a laptop and fail from the pipeline — the worse of the two failures, because it works for whoever wrote it.
+
+What remains is the load balancer, the stacks that call these modules, the first workflow that applies rather than plans, and a scheduled destroy. The last of those is not polish. Every cost in this milestone is hourly, so `dev` is cheap when it is short-lived, and the only thing keeping it short-lived today is memory: about six cents an hour is ten cents for an evening's work and $38 for an environment forgotten for a month. The number that decides the bill is not in any `.tf` file, which is the argument for making the destroy a property of the repository rather than a habit.
+
+One gap this milestone will meet and nothing before it could have found: `linkforge-gha-apply-dev` holds state access and the escalation deny and nothing else, so it cannot create a VPC, a subnet, a security group or an instance. The first apply from CI fails at `ec2:CreateVpc` before a single resource exists. That is the *permissions grow per milestone* design arriving for the first time, and it is a hand-applied change to `account/` for the same reason everything there is.
+
 ## About the infrastructure code
 
-The design is described in prose: which resources, how they connect, and which arguments matter. It is not copy-paste HCL. The purpose is to build the mental model of the resource graph, not to accumulate configuration.
+[ROADMAP.md](ROADMAP.md) describes each milestone's design in prose: which resources, how they connect, and which arguments matter. It is deliberately not HCL. The purpose of that document is to build the mental model of the resource graph before any of it is typed.
+
+The modules themselves are of course real Terraform, and they carry the reasoning inline rather than only in the READMEs — the comment next to an argument is where someone reading a diff will actually find it. Each module also has a README covering the interface, the resource graph, and the specific things the graph does not show: an implicit dependency, an argument whose default silently does nothing, a rule whose absence fails quietly rather than loudly.

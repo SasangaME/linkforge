@@ -101,7 +101,7 @@ The table above changes at the end of a milestone only. Thus it holds no detail 
 | 1 | The `dev` GitHub Environment, with its deployment branch rule | Done |
 | 2 | `modules/network`. The VPC, the subnets, and the difference between the environments expressed as arguments | Done |
 | 3 | The interface endpoints that let `dev` reach the AWS APIs without a NAT gateway | Done |
-| 4 | The host in a private subnet, reached over SSM. No key pair, no bastion, no inbound rule | Not started |
+| 4 | The host in a private subnet, reached over SSM. No key pair, no bastion, no inbound rule | Done |
 | 5 | The load balancer, and a target group that health checks `/health` | Not started |
 | 6 | `live/dev/network`, applied. `live/stage/network` and `live/prod/network`, written and validated only | Not started |
 | 7 | The first workflow that applies. It declares `environment: dev`, and it is what tests step 1 | Not started |
@@ -122,7 +122,17 @@ What that leaves is roughly six cents an hour for the whole of `dev`. Two hours 
 
 Step 4 is the reason the private subnets are worth building before there is an application. The host answers `/health` and nothing else. Its job is to prove that a machine with no public address, no inbound rule and no key pair is reachable, and that the endpoints in step 3 are what makes it so.
 
+It landed in two parts, and the split was found rather than chosen. The role and the instance profile are in `account/workload_roles.tf` and not in the module, because every apply role carries a permanent deny on `iam:Create*`, `iam:Attach*` and `iam:Add*` — which covers `CreateRole`, `CreateInstanceProfile` and `AddRoleToInstanceProfile`. A stack that made its own profile would apply from a laptop and fail from the pipeline, and that is the worse of the two failures, because it works for whoever wrote it.
+
+The machine itself is [modules/ssm-host](modules/ssm-host/). Written and merged, which is not applied — nothing calls it until step 6, so the only thing checking it is `terraform validate` in CI, exactly as with step 2. What it is built to demonstrate is that reachability here is an IAM decision and not a network one. The security group has no ingress rule of any kind; the agent dials out to Session Manager and the session runs back down the connection the host itself opened.
+
+Its egress is where the three environments differ, and the difference arrives as an argument rather than as a second copy of the module. With interface endpoints the far end of the connection is an ENI inside this VPC, so the rule can name its security group. With a NAT gateway the far end is the public internet, and a rule can name nothing but a CIDR. So the environment that pays for the NAT gateway ends up with the looser egress rule and the cheap one ends up with the tighter, which is the reverse of how the cost table reads. See [modules/ssm-host/README.md](modules/ssm-host/README.md) for that and for the S3 prefix list rule, which is the one omission in this module that fails silently rather than loudly.
+
 Step 6 is where the addressing fixed in `v0-bootstrap` is spent. `dev` is `10.0.0.0/16`, `stage` is `10.1.0.0/16`, `prod` is `10.2.0.0/16`, and only the first is applied. See [live/README.md](live/README.md) for the layout and for what makes an unapplied environment unreachable rather than merely unbuilt.
+
+Steps 6 and 7 also meet a gap that nothing before them could have found. `linkforge-gha-apply-dev` holds state access and the escalation deny and nothing else, so it cannot create a VPC, a subnet, an endpoint, a security group or an instance — the first apply from CI fails on `ec2:CreateVpc`, before a single resource exists. That is the *grows per milestone* line in [RUNBOOK.md](RUNBOOK.md) coming due for the first time, and it is a hand-applied change to `account/` for the same reason everything there is: a role that can write its own permissions makes the scoping decorative.
+
+Worth deciding before writing it rather than during. The permissions this milestone needs are the EC2 network surface plus `iam:PassRole` scoped to `linkforge-ssm-host` alone — a host cannot be given a profile the applying role may not pass, and an unscoped `PassRole` hands the pipeline every role in the account. It is also the first permission set that has to allow deletes, because step 9 destroys `dev` nightly with the same role.
 
 Step 8 is a decision and possibly no change. Terragrunt was deferred in `v0-bootstrap` because the duplication it removes did not exist yet. Step 6 creates it. Revisit it there rather than assuming either answer.
 
