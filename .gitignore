@@ -25,3 +25,6 @@ crash.*.log
 
 # Local working notes — personal scratch, not part of the deliverable.
 *.local.md
+# Lock files belong to root modules. A child module under modules/ gets one
+# only as a side effect of running init there by hand.
+modules/*/.terraform.lock.hcl

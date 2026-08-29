@@ -37,9 +37,17 @@ These prices are for `us-east-1`. The early milestones use these resources.
 | --- | --- | --- |
 | NAT Gateway | `$0.045` each hour, and `$0.045` for each GB | About $33, and the data cost |
 | Application Load Balancer | `$0.0225` each hour, and `$0.008` for each LCU hour | About $16, and the LCU cost |
-| Public IPv4 address | A price for each hour, for each address | Applies to the ALB and to the EIP of the NAT Gateway |
+| Interface VPC endpoint | `$0.01` each hour, **for each zone**, and `$0.01` for each GB | About $7 for each zone |
+| Gateway VPC endpoint | No charge | $0 |
+| Public IPv4 address | `$0.005` each hour, for each address | Applies to the ALB and to the EIP of each NAT Gateway |
 | AWS Budgets, alerts only | No charge, for any quantity of budgets | $0 |
 | AWS Budgets, with actions | The first two are free, then `$0.10` each day | $0, if the budgets send alerts only |
+
+The two endpoint rows are the same Terraform resource and they are not the same kind of cost. A gateway endpoint is an entry in a route table, and it is free. An interface endpoint is a network interface in a subnet, and you pay for **each zone that it is placed in**.
+
+That multiplier changes an answer. Milestone `v1-network` needs three interface endpoints for SSM. In one zone they cost about $22 each month, which is less than a NAT Gateway. In two zones they cost about $44, which is more. "Endpoints instead of a NAT Gateway" is cheaper or dearer depending on a number that does not appear in the sentence.
+
+The numbers below do not include the public IPv4 address cost. It is small, about $4 for each address each month, and the earlier estimates in this file were written without it. Add it from the first real bill rather than from this table.
 
 The next table gives approximate values. These values are not exact prices. When you complete a milestone, get the true cost from Cost Explorer. Then replace the value in the table. An estimate that you compare with the true bill has much more value than an estimate that you do not compare.
 
@@ -48,7 +56,7 @@ The next table gives approximate values. These values are not exact prices. When
 | Milestone | Largest cost | Standing cost | Minimum cost | Notes |
 | --- | --- | --- | --- | --- |
 | `v0-bootstrap` | S3 state, OIDC, budgets | About $0 | About $0 | The state objects are very small. OIDC and the budget alerts are free |
-| `v1-network` | NAT Gateway, ALB | About $50 | $0 | All costs are hourly. Thus the destroy operation removes all of them |
+| `v1-network` | Interface endpoints, ALB | About $38 | $0 | The value is for `dev`, the only environment that is built. All costs are hourly. Thus the destroy operation removes all of them |
 | `v2-fargate` | Fargate tasks, ECR, logs | About $15 | Low | The ECR images and the logs remain. Give the log group a retention period |
 | `v3-pipeline` | GitHub Actions | About $0 | $0 | Free for a public repository. You do not pay for this compute |
 | `v4-state` | KMS, Secrets Manager | Low | **Yes** | You pay for each key and each secret every month, even when nothing operates |
@@ -63,7 +71,11 @@ Two different shapes are in this table. The standing cost increases quickly at `
 
 ## The value of the daily destroy
 
-Milestones `v1-network` to `v3-pipeline` have a standing cost of about $65 each month. Their minimum cost is almost $0. If you operate this infrastructure for two hours each day, the cost is less than $6 each month.
+Milestones `v1-network` to `v3-pipeline` have a standing cost of about $53 each month. Their minimum cost is almost $0. If you operate this infrastructure for two hours each day, the cost is about $4 each month.
+
+State that as a rate, because the rate is the part you control. `dev` after `v1-network` costs about **five cents each hour**. A session of two hours costs ten cents. The same environment left for one month costs about $38. The infrastructure is identical in both sentences. Only the hours differ.
+
+Thus the number that decides this bill is not in any `.tf` file, and it is not the budget either. It is whether the environment is destroyed. Milestone `v1-network` step 9 makes that automatic, because a control that depends on memory is not a control.
 
 This ratio is the reason for the daily destroy. It is also the reason that `v0-bootstrap` did not select EKS. The EKS control plane costs about $73 each month. You pay this cost even when no application operates. Thus a destroy operation cannot make EKS cheap.
 
@@ -83,7 +95,7 @@ The budget must send alerts only. A budget action can stop resources automatical
 
 The repository defines `dev`, `stage`, and `prod`. It applies `dev` only.
 
-The arithmetic is the whole argument. Milestone `v1-network` has a standing cost of about $50 each month: about $33 for the NAT Gateway and about $16 for the load balancer. Three copies is about $150 each month. The budget is $10.
+The arithmetic is the whole argument. A `v1-network` environment in the shape of production costs about $50 each month: about $33 for the NAT Gateway and about $16 for the load balancer. Three copies is about $150 each month. The budget is $10.
 
 The daily destroy does not solve this. It solves the cost of an environment you work in, because you destroy that environment at the end of the day. It does not solve the cost of two environments you do not work in, because you never stand them up to destroy them. The cheapest environment is the one that is only code.
 
@@ -92,13 +104,20 @@ Thus the three environments are not the same shape.
 | | `dev` | `stage` | `prod` |
 | --- | --- | --- | --- |
 | Applied | Yes | No | No |
+| Zones | 2 | 2 | 2 |
 | NAT Gateway | None | One, shared | One for each zone |
+| Interface endpoints | Three, in one zone | None | None |
 | Load balancer | One | One | One |
-| Standing cost | About $16 | About $49 | About $82 |
+| Cost for each hour | About `$0.053` | About `$0.073` | About `$0.113` |
+| Standing cost | About $38 | About $49 | About $82 |
 
-`dev` reaches the AWS APIs through interface endpoints and not through a NAT Gateway. This removes the largest hourly cost of `v1-network`.
+`dev` reaches the AWS APIs through interface endpoints and not through a NAT Gateway.
 
-It does not remove the need to destroy. About $16 each month is still more than the $10 budget, because the load balancer remains. A NAT-free `dev` is cheaper by two thirds, and it is not free. The daily destroy stays, and the resource that makes it necessary is now the load balancer and not the NAT Gateway.
+The first version of this file said that this removes the largest hourly cost of the milestone, and that `dev` is cheaper by two thirds. Both statements were wrong, and the reason is the per-zone multiplier above. Three endpoints in two zones cost about $44 each month, and a NAT Gateway costs about $33. Written that way, `dev` was the most expensive environment in the project and the cheapest one on paper.
+
+`dev` places its endpoints in **one zone**, which costs about $22 and makes the original claim true. The subnets stay in two zones, because a load balancer does not accept one subnet, and a subnet is free. The cost of the single zone is not money. It is that a fault in that zone costs `dev` its SSM access, which is acceptable in an environment that is rebuilt each day and is not acceptable anywhere else.
+
+The destroy is still necessary. About $38 each month is far above the $10 budget, and the load balancer alone is above it. What changed is only the size of the number.
 
 Two rules follow, and both are about correctness and not about cost.
 
@@ -121,6 +140,7 @@ Thus start this sequence early. Milestone `v1-network` creates the first resourc
 ## Rules
 
 1. Give each log group a retention period when you create it. The default value is "never expire". This is a remaining cost, and it always increases.
-2. Destroy the stack at the end of each session. From `v1-network`, this controls the difference between a small bill and a large bill.
+2. Destroy the stack at the end of each session. From `v1-network`, this controls the difference between a small bill and a large bill. Milestone `v1-network` step 9 adds a scheduled destroy for `dev`, because this rule is the only one in this file that depends on a person remembering it.
 3. Examine the minimum cost each month. In a week with no work, the bill must stay at about the same value. If it does not, a resource exists outside the stack.
 4. When you complete a milestone, record the true cost. Then replace the estimate in the table above.
+5. Read the unit of a price and not only the number. An interface endpoint is priced for each zone, a NAT Gateway for each gateway, and a log group for each GB that it keeps. The unit is where an estimate goes wrong, and the error is a multiple and not a rounding.

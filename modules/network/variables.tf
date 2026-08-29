@@ -52,6 +52,32 @@ variable "nat_gateway_count" {
   }
 }
 
+# Deliberately not az_count, because the two numbers move for different reasons.
+# A subnet is free, so az_count follows what the workload needs — two, because a
+# load balancer will not accept fewer. An interface endpoint is billed for every
+# zone it is placed in, so this follows what the environment is worth paying for.
+# dev places its endpoints in one zone and accepts that a zone fault costs it SSM
+# access, in an environment that is rebuilt daily.
+variable "interface_endpoint_az_count" {
+  description = "Zones to place the SSM interface endpoints in, taken from the front of the private tier. 0 creates none. Billed per endpoint per zone, so this is a cost decision before it is an availability one."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.interface_endpoint_az_count >= 0 && var.interface_endpoint_az_count <= var.az_count
+    error_message = "The interface_endpoint_az_count value must be between 0 and az_count. Endpoints are placed in the first private subnets and there is no subnet past az_count to place one in."
+  }
+
+  # Both counts default to zero, so the default combination is rejected and a
+  # caller has to state how its private subnets reach AWS. That is the point.
+  # Without this, the module builds an environment where every apply succeeds,
+  # every instance is unreachable, and nothing in the plan says so.
+  validation {
+    condition     = var.nat_gateway_count > 0 || var.interface_endpoint_az_count > 0
+    error_message = "An environment with no NAT gateway and no interface endpoints has no route from its private subnets to the AWS APIs. Set one of nat_gateway_count or interface_endpoint_az_count above zero."
+  }
+}
+
 variable "tags" {
   description = "Extra tags for every resource. The provider's default_tags already carry the project-wide four."
   type        = map(string)
