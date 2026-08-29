@@ -1,0 +1,92 @@
+name: terraform plan
+
+# pull_request only, and that is a constraint rather than a preference.
+# GitHub writes the event into the OIDC token's sub claim. The plan role's
+# trust policy pins repo:SasangaME/linkforge:pull_request with StringEquals,
+# so a push or a workflow_dispatch run carries a different sub and cannot
+# assume the role at all. The trigger and the trust policy are one decision
+# written in two places.
+on:
+  pull_request:
+    branches: [main]
+
+# Two runs on the same ref both try to take a .tflock object on the same state
+# file, and the second fails. Queue rather than cancel: cancelling kills
+# Terraform mid-plan while it holds the lock, and the lock is released only on
+# a graceful exit, so the following run meets a lock that belongs to nobody.
+concurrency:
+  group: terraform-plan-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  TF_VERSION: 1.14.6
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  plan:
+    name: fmt, validate, plan
+    runs-on: ubuntu-latest
+
+    permissions:
+      # Permission to mint the OIDC token. It grants write access to nothing.
+      # Declaring the block at all drops the job token to exactly these two.
+      id-token: write
+      contents: read
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: install terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          # The wrapper exists to expose stdout as step outputs, which nothing
+          # here consumes. Off, so the logs carry Terraform's own output.
+          terraform_wrapper: false
+
+      # The cheapest gate, and it needs no AWS access. Run it before the job
+      # holds any credentials. -recursive covers bootstrap/ and account/ from
+      # the repository root.
+      - name: fmt
+        run: terraform fmt -check -recursive
+
+      - name: assume the plan role
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          # Required even though the provider declares a region — the action
+          # needs one for its own STS call.
+          aws-region: ${{ env.AWS_REGION }}
+          # This string is what CloudTrail records. The default tells you
+          # nothing six months later.
+          role-session-name: linkforge-plan-${{ github.run_id }}
+          # audience is left unset. It defaults to sts.amazonaws.com, which is
+          # exactly what the trust policy's aud condition requires.
+
+      # A green credentials step proves less than this does. The Arn must read
+      # assumed-role/linkforge-gha-plan. Anything else means some other
+      # identity is doing the work.
+      - name: whoami
+        run: aws sts get-caller-identity
+
+      # The first step that touches AWS. -input=false is not optional in CI:
+      # without it a prompt hangs the job until the six hour timeout rather
+      # than failing.
+      - name: init
+        run: terraform -chdir=bootstrap init -input=false -lock-timeout=5m
+
+      # After init, because validate needs the provider schema on disk.
+      - name: validate
+        run: terraform -chdir=bootstrap validate
+
+      # No -out. A saved plan is state-adjacent — binary, derived, every
+      # attribute value in plaintext — and nothing in v0 applies it. The
+      # plan-file-as-artifact split belongs to v3-pipeline.
+      #
+      # No -detailed-exitcode. It exits 2 when changes are present, and a pull
+      # request proposing changes is the normal case, not a failure. That flag
+      # belongs to a scheduled drift check.
+      - name: plan
+        run: terraform -chdir=bootstrap plan -input=false -no-color -lock-timeout=5m
