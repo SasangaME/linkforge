@@ -1,0 +1,51 @@
+#!/bin/bash
+# Runs once, at first boot. Output lands in /var/log/cloud-init-output.log,
+# which is the first place to look when the host registers and /health does not
+# answer. -x is on for exactly that reason.
+set -euxo pipefail
+
+
+cat > /opt/health.py <<'PY'
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+PORT = ${health_port}
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        ok = self.path == "/health"
+        body = b"ok\n" if ok else b"not found\n"
+        self.send_response(200 if ok else 404)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    # The default handler logs every request to stderr, which in a target group
+    # health check is one line every thirty seconds, forever.
+    def log_message(self, *args):
+        pass
+
+ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+PY
+
+cat > /etc/systemd/system/health.service <<'UNIT'
+[Unit]
+Description=LinkForge v1-network health responder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/health.py
+Restart=always
+RestartSec=2
+# A transient unprivileged user, created for this unit and discarded with it.
+# The port is above 1024, so nothing here needs root.
+DynamicUser=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now health.service
