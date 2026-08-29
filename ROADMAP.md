@@ -104,11 +104,16 @@ The table above changes at the end of a milestone only. Thus it holds no detail 
 | 4 | The GitHub OIDC provider, with a plan role and an apply role | Done |
 | 5 | The billing limit. A budget, an SNS topic, and an email subscription | Done |
 | 6 | The account baseline. Public access block, EBS encryption, password policy | Not started |
-| 7 | The first workflow. `fmt`, `validate`, and `plan` on each pull request | Not started |
+| 7 | The first workflow. `fmt`, `validate`, and `plan` on each pull request | Done |
+| 8 | The environment split. `dev`, `stage`, and `prod` defined; `dev` alone applied | Written, pending apply |
 
 Steps 1 to 3 give a state backend that holds its own state. This is the part that each later milestone uses.
 
 Steps 4 and 7 are one test in two parts. Step 4 makes the roles. Step 7 proves that they work. `v0-bootstrap` is complete when a pull request makes a plan that reads the state from S3 with OIDC credentials, and no identity in the pipeline holds an access key.
+
+Step 8 is placed inside `v0-bootstrap` and not inside `v1-network` for one reason. The first resource with an address is created in `v1-network`, and a VPC CIDR cannot be changed after that — a correction destroys the VPC and everything holding an address in it. The same is true of the module interface: an environment that differs from production in its code rather than in its arguments is not testing production, and that is a property you build in or lose. Both are free to decide now and expensive to decide later.
+
+Only `dev` is applied. `stage` and `prod` are written, validated on every pull request, and never built, because three copies of `v1-network` cost about $150 each month against a $10 budget. See [live/README.md](live/README.md) for the layout, the address allocation, and what makes an unapplied environment unreachable rather than merely unbuilt.
 
 Three operations of this milestone are not Terraform code. They are in [RUNBOOK.md](RUNBOOK.md), and all three are done. Cost Explorer and the cost allocation tags closed on 2026-08-28, before milestone `v1-network` makes the first resources with a real cost. The budget alert subscription was confirmed on 2026-08-29.
 

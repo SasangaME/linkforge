@@ -6,9 +6,17 @@ name: terraform plan
 # so a push or a workflow_dispatch run carries a different sub and cannot
 # assume the role at all. The trigger and the trust policy are one decision
 # written in two places.
+#
+# The base branch is not in that decision. A pull request carries the same sub
+# whichever branch it targets, so widening this list needs no IAM change — and
+# it has to be widened, because release/* is the branch that reaches stage and
+# prod. A hotfix opened against a release branch that got no plan would be a
+# change reviewed less carefully than the one that reaches dev.
 on:
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      - 'release/**'
 
 # Two runs on the same ref both try to take a .tflock object on the same state
 # file, and the second fails. Queue rather than cancel: cancelling kills
@@ -51,6 +59,51 @@ jobs:
       # the repository root.
       - name: fmt
         run: terraform fmt -check -recursive
+
+      # Every environment's configuration is checked on every pull request,
+      # including the two that are never applied. -backend=false installs the
+      # providers and stops there: no S3, no state object, no lock, and so no
+      # credentials — which is why this sits above the step that acquires them.
+      # It is the only thing standing between an unapplied environment and
+      # silent rot, and it catches syntax, types and references but nothing
+      # that only the AWS API can refuse.
+      #
+      # There is deliberately no `plan` for stage and prod. Planning an
+      # environment that does not exist prints its entire resource graph as
+      # "to add" on every pull request forever, and a plan nobody reads is
+      # worse than no plan at all.
+      #
+      # The loop discovers stacks rather than listing them, so `v1-network`
+      # adding live/dev/network needs no edit here. It exits cleanly while
+      # live/ is still empty.
+      - name: validate every environment
+        run: |
+          set -eu
+          # Word-split on whitespace rather than mapfile, which bash 3.2 does
+          # not have — this loop has to be runnable by hand on a Mac, and a
+          # check that only exists inside CI is a check you stop trusting.
+          # Stack paths are lowercase and contain no spaces; live/README.md
+          # says so and the environments variable validates it.
+          stacks="$(find account live -name '*.tf' -exec dirname {} \; | sort -u)"
+          if [ -z "$stacks" ]; then
+            echo "no stacks to validate yet"
+            exit 0
+          fi
+          scratch="$(mktemp -d)"
+          for stack in $stacks; do
+            echo "::group::validate $stack"
+            # TF_DATA_DIR keeps this out of any .terraform/ that a real init
+            # already wrote. A runner checkout has none, but a laptop does, and
+            # there `init -backend=false` fails reaching for the very backend
+            # it was told to skip. An absolute path, because a relative one
+            # resolves against -chdir rather than against here.
+            TF_DATA_DIR="$scratch/$(echo "$stack" | tr / _)" \
+              terraform -chdir="$stack" init -backend=false -input=false
+            TF_DATA_DIR="$scratch/$(echo "$stack" | tr / _)" \
+              terraform -chdir="$stack" validate
+            echo "::endgroup::"
+          done
+          rm -rf "$scratch"
 
       - name: assume the plan role
         uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5

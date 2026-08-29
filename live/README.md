@@ -1,0 +1,157 @@
+# `live/`
+
+One directory per environment, one subdirectory per stack:
+
+```
+live/<environment>/<stack>/
+```
+
+A stack is a Terraform root module — one directory of `.tf` files with its own
+backend block and its own state file. `live/dev/network` and `live/prod/network`
+are two separate root modules calling the same module out of [`modules/`](../modules/),
+with different arguments. The module holds the resource graph; the directory
+holds the decisions.
+
+Nothing exists here yet. `v1-network` writes the first stack.
+
+## What is applied
+
+| Environment | Applied | Reachable from CI |
+| --- | --- | --- |
+| `dev` | Yes | Yes |
+| `stage` | No — configuration only | No |
+| `prod` | No — configuration only | No |
+
+Stage and prod are written and checked but never built. That is a deliberate
+cost decision, not an unfinished one: three environments of `v1-network` is
+about $150 a month standing against a $10 budget, and the point of writing all
+three now is that the shape is fixed before the first `terraform apply`, not
+retrofitted after it.
+
+What makes stage and prod unreachable is not a comment or a missing file. It is
+that their GitHub Environments do not exist, so GitHub will not mint a token
+carrying `:environment:prod`, so `linkforge-gha-apply-prod` cannot be assumed by
+anyone — including by a workflow that asks for it. The IAM role exists. It is
+inert. See [RUNBOOK.md](../RUNBOOK.md), operation 5.
+
+The cost of this is worth stating plainly. `terraform validate` on every pull
+request catches syntax, type and reference errors in an environment nobody
+builds. It cannot catch an IAM denial, a service quota, an unavailable
+availability zone, or a name that collides with something already in the
+account. The first `stage` apply will be a debugging session, not a formality —
+the same shape as reading a trust policy back from IAM and learning nothing
+about whether GitHub would ever send that string.
+
+## How a change reaches an environment
+
+```
+merge to main ─────────────────► dev
+                    │
+                    └─ cut release/x.xx ──► stage ──► prod
+                                                  (reviewer)
+```
+
+| Environment | Deployment branches | Gate |
+| --- | --- | --- |
+| `dev` | `main` | None |
+| `stage` | `release/*` | None |
+| `prod` | `release/*` | Required reviewer |
+
+`release/*` is a name pattern, not a regular expression: its `*` does not cross
+a `/`, so it matches `release/1.02` and not `release/1.02/hotfix`. There is no
+way to express "two digits, a dot, two digits" in a deployment branch rule, and
+that is not what makes this safe.
+
+What makes it safe is worth stating plainly, because the diagram hides it. Stage
+and prod share a branch pattern, so the branch is not what separates them — the
+required reviewer on prod is. A commit that can reach stage can reach prod, and
+one human stands between. The branch pattern decides which commits are
+candidates; the reviewer decides which one ships.
+
+Which makes the creation of a `release/*` branch the actual perimeter, and it is
+closed with a repository ruleset restricting who may create one — not with
+anything in this repository. That, the deployment branch rules, and the required
+reviewer are all GitHub-side, and none of them is visible to AWS.
+
+They have to be. A job that declares an environment gets a subject claim naming
+the environment and *not* the ref: the environment replaces the branch segment
+rather than joining it, so there is no branch left in the token for an IAM
+condition to test. This is the one control in the project that Terraform cannot
+express and a plan will never show. [RUNBOOK.md](../RUNBOOK.md), operation 5.
+
+## State
+
+One bucket, `linkforge-tfstate-749000381089`, for every environment. The key is
+the path relative to this directory:
+
+```
+<environment>/<stack>/terraform.tfstate
+```
+
+so `live/dev/network` writes `dev/network/terraform.tfstate`, and the S3-native
+lock sits beside it as `dev/network/terraform.tfstate.tflock`.
+
+Three buckets would mean three bootstraps, because a state bucket is the one
+thing that cannot store its own state until it exists. The isolation that
+matters is the write, and it comes from the prefix in the role policy rather
+than from the bucket boundary: `linkforge-gha-apply-dev` is scoped to
+`dev/*/terraform.tfstate` and cannot write prod's state whether or not prod's
+state is somewhere else. Separate buckets begin to earn their keep when the
+environments are in separate accounts, because a bucket policy is then the
+cross-account boundary — and even then the usual answer keeps state in one
+shared account. That is `v9-govern`.
+
+## Address allocation
+
+Assigned now, before anything is built, because a VPC CIDR cannot be changed —
+correcting one means destroying the VPC and everything with an address in it.
+
+| Environment | VPC CIDR |
+| --- | --- |
+| `dev` | `10.0.0.0/16` |
+| `stage` | `10.1.0.0/16` |
+| `prod` | `10.2.0.0/16` |
+
+Non-overlapping, so that peering or a transit gateway later is a decision rather
+than a re-address. Nothing peers today.
+
+## The environments are not identical
+
+They differ in exactly one dimension: what is allowed to cost money while idle.
+
+| | `dev` | `stage` | `prod` |
+| --- | --- | --- | --- |
+| Availability zones | 2 | 2 | 2 |
+| NAT gateway | None | One, shared | One per zone |
+| Load balancer | One | One | One |
+| Standing cost | ~$16 | ~$49 | ~$82 |
+
+`dev` reaches AWS APIs through interface endpoints rather than a NAT gateway,
+which removes the single largest hourly cost in `v1-network`. It does not make
+dev free — the load balancer is still about $16 a month, still above the
+budget — so dev is destroyed at the end of the day like everything else. What
+changes is that the resource forcing that habit is now the load balancer.
+
+`stage` matches prod's topology at the smallest size that still has the
+topology. One NAT gateway is a single point of failure, which is acceptable in
+an environment whose job is to prove the graph is correct, and not acceptable in
+prod.
+
+This asymmetry has to be an *input* to the network module — something like
+`az_count` and a NAT-gateway count — and never three divergent copies of the
+module. A staging environment that differs from prod in its code rather than in
+its arguments is not testing prod. That constraint belongs to whoever writes
+`modules/network` in `v1-network`; it is written here because it is a property
+of the environments, not of the module.
+
+## Terragrunt
+
+Not yet. The duplication Terragrunt removes — a backend block that cannot take a
+variable, repeated once per stack per environment — does not exist until there
+are stacks to repeat it across. Revisit at `v1-network`, when the first stack
+lands in all three directories and the same nine lines appear nine times.
+
+The layout above is what Terragrunt would use anyway. Adopting it adds
+`terragrunt.hcl` files; it does not move any directory. One caution for that
+day: `run-all` walks the whole tree, so `terragrunt run-all apply` from `live/`
+would build the two environments this project has decided not to build.
