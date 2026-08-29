@@ -11,6 +11,7 @@ An operation in this file has three parts: the reason for it, the correct time t
 | Enable Cost Explorer | `v0-bootstrap` | Done |
 | Activate the cost allocation tags | `v0-bootstrap` | Done, 2026-08-28 |
 | Confirm the budget alert subscription | `v0-bootstrap` | Done, 2026-08-29 |
+| Set the plan role repository variable | `v0-bootstrap` | Pending |
 
 ## The correct sequence
 
@@ -163,6 +164,54 @@ This destroys the dead subscription, creates a new one, and sends a new confirma
 Expect **two** mails from a replacement, and read them in the correct order. The destroy sends `Your subscription to the topic below has been deactivated`, because SNS mails the endpoint whenever a subscription is removed, including a removal by Terraform. The create sends the new confirmation request. The deactivation mail refers to the old subscription and is not a fault. Answer the confirmation mail and ignore the other.
 
 The console offers a second path. SNS → Topics → `linkforge-budget-alerts` → Subscriptions → **Request confirmation**. That path sends the mail without touching the state, and it is correct when the subscription is `PendingConfirmation`. It is not correct when the subscription is `Deleted`, because there is no longer a subscription to confirm.
+
+## Operation 4: Set the plan role repository variable
+
+**Reason.** The pull request workflow assumes the plan role by ARN. GitHub Actions cannot read Terraform state, thus it cannot read the `gha_plan_role_arn` output, thus the ARN must be given to the repository by hand.
+
+Terraform has no resource for this. A GitHub repository variable is managed by the `github` provider, and that provider needs a GitHub token with repository administration rights. Holding such a token to set one string is a worse trade than setting the string by hand, so this project does not adopt the provider.
+
+**Why a variable and not a secret.** The ARN is not credential material. A secret is masked in the log, and the masking hides the exact value you need to read on the day an assume fails. The account ID inside the ARN is already committed in both backend blocks, where it must be a literal string, so nothing is concealed by treating it as a secret.
+
+Note that a repository variable is visible to anyone who can read the Actions logs, and it appears unmasked there. That is intended.
+
+**When.** Once, before the first pull request. Repeat if the role is destroyed and recreated under another name. Repeat also at `v9-govern`, where the account changes and the ARN changes with it.
+
+**Steps.**
+
+1. Read the value from the `account` module:
+
+   ```bash
+   export AWS_PROFILE=dev
+   terraform -chdir=account output -raw gha_plan_role_arn
+   ```
+
+   Today it returns `arn:aws:iam::749000381089:role/linkforge-gha-plan`.
+
+2. Open `https://github.com/SasangaME/linkforge/settings/variables/actions`.
+3. Select **New repository variable**.
+4. Set the name to `AWS_PLAN_ROLE_ARN` and the value to the ARN from step 1.
+5. Select **Add variable**.
+
+The `gh` CLI does the same in one command, if it is ever installed on this machine:
+
+```bash
+gh variable set AWS_PLAN_ROLE_ARN --body "$(terraform -chdir=account output -raw gha_plan_role_arn)"
+```
+
+**Check.** There is no AWS-side check, because this value lives in GitHub. Two checks exist.
+
+The weak check is the settings page. The variable must appear in the list, with the correct value.
+
+The strong check is the workflow. Open a pull request and read the **whoami** step. It must print:
+
+```
+arn:aws:sts::749000381089:assumed-role/linkforge-gha-plan/linkforge-plan-<run id>
+```
+
+Any other identity means the variable holds the wrong ARN.
+
+**The failure signature when it is unset.** This is worth knowing, because the message does not name the cause. An unset variable expands to an empty string, so `role-to-assume` is empty, and `configure-aws-credentials` fails with a complaint about credentials rather than about a missing variable. If that step fails on a fresh repository, check this operation first.
 
 ## A note for `v9-govern`
 
