@@ -87,7 +87,13 @@ A merge to `main` reaches dev; a `release/x.xx` branch cut from main reaches sta
 
 The honest limit of that arrangement is that `validate` on an unbuilt environment catches syntax, types and references, and nothing an AWS API has to refuse. The first `stage` apply will find quotas and name collisions — the same lesson as reading a trust policy back from IAM and learning only that it says what it was written to say.
 
-What remains in the milestone is the account baseline — an account-level public access block, default EBS encryption, a password policy. `v0-bootstrap` is done when a pull request can plan against remote state using credentials that exist only for the life of the job.
+The same module carries the account baseline: an account-level S3 public access block that sits above every bucket policy in the account, EBS encryption on by default, and a console password policy. All three were unset, so each is a default being chosen rather than confirmed, and all three govern only what is created after them — which is the argument for doing them in `v0-bootstrap`, while there is nothing yet to grandfather in. Two are account-global and one, the EBS setting, is regional and quietly covers `us-east-1` alone; the pilot-light region in `v10-resilient` will start without it and no plan in this module will say so.
+
+The password policy is the honest outlier. The account holds one IAM user, it is break-glass, and it has no console password for the policy to govern. It is here because the moment it stops being decorative is the moment somebody creates a console user, which is exactly the moment nobody is thinking about password rules.
+
+It is also the clearest illustration of why `account/` is applied by hand: the permanent deny on identity mutation that every OIDC role carries includes `iam:Update*`, so no CI role in this project can set an account password policy, by construction.
+
+`v0-bootstrap` is done when a pull request can plan against remote state using credentials that exist only for the life of the job.
 
 A few operations have no Terraform resource and no API worth automating: enabling Cost Explorer, activating cost allocation tags, answering an SNS confirmation mail, handing the workflow its role ARN. Those live in [RUNBOOK.md](RUNBOOK.md), each with the reason for it, the moment to do it, and a check — because a manual step has no plan output to read.
 
