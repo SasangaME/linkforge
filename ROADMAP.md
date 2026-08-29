@@ -80,7 +80,7 @@ The application does not change for scale. It must only be stateless. Milestone 
 
 | Tag | Status |
 | --- | --- |
-| `v0-bootstrap` | In progress |
+| `v0-bootstrap` | Complete, 2026-08-29 |
 | `v1-network` | Not started |
 | `v2-fargate` | Not started |
 | `v3-pipeline` | Not started |
@@ -103,7 +103,7 @@ The table above changes at the end of a milestone only. Thus it holds no detail 
 | 3 | The `backend` block, and the move of the state into the bucket | Done |
 | 4 | The GitHub OIDC provider, with a plan role and an apply role | Done |
 | 5 | The billing limit. A budget, an SNS topic, and an email subscription | Done |
-| 6 | The account baseline. Public access block, EBS encryption, password policy | Written, pending apply |
+| 6 | The account baseline. Public access block, EBS encryption, password policy | Done |
 | 7 | The first workflow. `fmt`, `validate`, and `plan` on each pull request | Done |
 | 8 | The environment split. `dev`, `stage`, and `prod` defined; `dev` alone applied | Done |
 
@@ -115,6 +115,8 @@ Step 8 is placed inside `v0-bootstrap` and not inside `v1-network` for one reaso
 
 Only `dev` is applied. `stage` and `prod` are written, validated on every pull request, and never built, because three copies of `v1-network` cost about $150 each month against a $10 budget. See [live/README.md](live/README.md) for the layout, the address allocation, and what makes an unapplied environment unreachable rather than merely unbuilt.
 
-Three operations of this milestone are not Terraform code. They are in [RUNBOOK.md](RUNBOOK.md), and all three are done. Cost Explorer and the cost allocation tags closed on 2026-08-28, before milestone `v1-network` makes the first resources with a real cost. The budget alert subscription was confirmed on 2026-08-29.
+Five operations of this milestone are not Terraform code. They are in [RUNBOOK.md](RUNBOOK.md), and all five are done. Cost Explorer and the cost allocation tags closed on 2026-08-28, before milestone `v1-network` makes the first resources with a real cost. The budget alert subscription and the plan role repository variable were confirmed on 2026-08-29, and the account module was applied by hand the same day.
+
+The sixth operation, creating the GitHub Environments, belongs to `v1-network` and not here. Nothing in `v0-bootstrap` applies anything, so no job in this milestone ever declares an environment or needs a token that names one.
 
 

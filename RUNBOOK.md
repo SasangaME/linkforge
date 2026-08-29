@@ -12,7 +12,8 @@ An operation in this file has three parts: the reason for it, the correct time t
 | Activate the cost allocation tags | `v0-bootstrap` | Done, 2026-08-28 |
 | Confirm the budget alert subscription | `v0-bootstrap` | Done, 2026-08-29 |
 | Set the plan role repository variable | `v0-bootstrap` | Done, 2026-08-29 |
-| Create the GitHub Environments | `v0-bootstrap` | Not started |
+| Create the GitHub Environments | `v1-network` | Not started |
+| Apply the `account` module by hand | `v0-bootstrap` onward | Done, 2026-08-29 |
 
 ## The correct sequence
 
@@ -246,6 +247,8 @@ Which makes the creation of a `release/*` branch the real perimeter. Anyone with
 
 **When.** `dev` once, before the first workflow job that applies anything. Not needed by [.github/workflows/plan.yml](.github/workflows/plan.yml), which declares no environment and uses the plan role. `stage` and `prod` on the day each is promoted; that promotion is this operation and nothing else.
 
+That first job arrives in `v1-network`, which is why this operation is tagged to that milestone and not left as a loose end of `v0-bootstrap`. Nothing in `v0-bootstrap` applies anything, so v0 closed without it correctly rather than in spite of it. It is the first step of `v1-network` and it blocks the rest.
+
 **Steps.**
 
 1. Open `https://github.com/SasangaME/linkforge/settings/environments`.
@@ -278,6 +281,75 @@ Until then, the useful negative check is that `stage` and `prod` do not appear o
 **The failure signature.** `Not authorized to perform sts:AssumeRoleWithWebIdentity`, identical to a wrong subject and to a missing environment, because STS never names the claim that failed. If a job declaring an environment cannot assume its role, check this page before rereading the trust policy — and if it still fails, print the token's `sub` and `aud` claims, never the token, exactly as step 7 did.
 
 **The option not taken.** GitHub can be told to include the `ref` claim in the subject, through the OIDC subject claim customization API, which would put the branch back within reach of an IAM condition and give this control a second enforcement point. It is deferred for two reasons. The customization is repository-wide, so it rewrites the subject for every token including the plan role's, which would mean re-deriving a trust policy that already cost one debugging session to get right. And the branch is already enforced before the token exists — a second check on a claim GitHub has already decided is defence in depth, not a missing control. Revisit at `v3-pipeline`, where the apply path becomes real.
+
+## Operation 6: Apply the `account` module by hand
+
+**Reason.** `account/` is applied from a workstation and never by a pipeline. Three
+independent reasons hold that, and any one of them would be enough:
+
+- `budget_alert_email` has no default, so a non-interactive `plan` fails. Supplying it
+  as a secret would work and would still be wrong: the resolved plan prints the address
+  in plaintext in a log on a public repository.
+- [account/baseline.tf](account/baseline.tf) needs `iam:UpdateAccountPasswordPolicy`,
+  and the `no_escalation` guardrail on every CI role denies `iam:Update*` with an
+  explicit `Deny`. No policy added later can override that.
+- A role able to edit IAM makes the per-milestone scoping of every other role
+  decorative. The module that defines the roles is the last place to hand a role.
+
+The consequence is the reason this is an operation and not a note. **Merging a change
+to `account/` changes nothing in AWS, and no job in this repository will ever say so.**
+The pull request goes green, `main` is up to date, the working tree is clean, and the
+account is unchanged. That is not a gap in the CI; it is the design working, and this
+operation is the other half of it.
+
+It happened. [account/baseline.tf](account/baseline.tf) merged in PR #5 and sat unapplied
+for a day, while the roadmap read as though the step were finished.
+
+**When.** After every merge that touches `account/`. Also before starting any milestone
+that depends on a role, a policy or an account setting defined there — `v1-network`
+depends on all three.
+
+**Steps.**
+
+1. Confirm `account/account.tfvars` exists. It is git-ignored, so a fresh clone does not
+   have it, and nothing committed announces that the module needs an input —
+   [account/variables.tf](account/variables.tf) and its `description` strings are the
+   only record. It holds `budget_alert_email`.
+2. Plan and apply:
+
+   ```bash
+   export AWS_PROFILE=dev
+   terraform -chdir=account plan -out=account.tfplan -var-file=account.tfvars
+   terraform -chdir=account apply account.tfplan
+   ```
+
+   `-var-file` is needed on **plan** as well as on apply. A saved plan carries the
+   resolved values, so the apply takes no var file.
+
+**Check.** `plan` reporting `No changes` is the weak check, and this repository has
+already collected two cases where a clean plan described something that was not true —
+a dead SNS subscription, and a trust policy that matched a subject GitHub never sends.
+Read the account settings back from the services that own them:
+
+```bash
+aws s3control get-public-access-block --account-id 749000381089
+aws ec2 get-ebs-encryption-by-default --region us-east-1
+aws iam get-account-password-policy
+```
+
+Before the first apply these returned `NoSuchPublicAccessBlockConfiguration`, `false`
+and `NoSuchEntity`. After it, four `true` flags, `true`, and a policy of length 14.
+
+Two fields in the password policy response do not map one-to-one onto the configuration,
+and both matter when reading this output under pressure. `HardExpiry` is **absent**
+rather than `false` — IAM omits the field when it is off, so the deliberate
+`hard_expiry = false` is confirmed by a missing key and its failure mode is a key
+appearing. `ExpirePasswords: true` is present and is not configured — IAM derives it
+from `max_password_age`, and it is not drift.
+
+The roles defined in this module have no check here. A trust policy read back from IAM
+proves only that it says what it was written to say; the only thing that tests one is
+assuming the role. That is operation 5 and `v1-network`.
 
 ## A note for `v9-govern`
 
