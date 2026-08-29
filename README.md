@@ -59,15 +59,21 @@ See [ROADMAP.md](ROADMAP.md) for the milestone list and current status.
 
 ## What exists today
 
-`v0-bootstrap` is in progress.
+`v0-bootstrap` is in progress. The repository holds two Terraform modules, and both are applied.
 
-The repository holds one Terraform module, [bootstrap/](bootstrap/), and it is applied. It defines the S3 bucket that every later module stores its state in: versioned so a bad apply is recoverable, encrypted, closed to public access, denying any request that does not arrive over TLS, and expiring noncurrent versions after ninety days. Locking is S3's own, not a DynamoDB table — the table was the only option until Terraform 1.10, and the argument that configures one has been deprecated since 1.11.
+[bootstrap/](bootstrap/) defines the S3 bucket that every later module stores its state in: versioned so a bad apply is recoverable, encrypted, closed to public access, denying any request that does not arrive over TLS, and expiring noncurrent versions after ninety days. Locking is S3's own, not a DynamoDB table — the table was the only option until Terraform 1.10, and the argument that configures one has been deprecated since 1.11.
 
-The module was applied on local state, because the backend it would otherwise use was the thing it was creating. That state has since moved into the bucket, so the module now records itself in the object store it brought into existence. This bootstrapping step happens exactly once in the life of the repository; every module after it has a backend from its first line.
+That module was applied on local state, because the backend it would otherwise use was the thing it was creating. Its state has since moved into the bucket, so the module now records itself in the object store it brought into existence. This happens exactly once in the life of a repository; every module after it has a backend from its first line.
 
-The rest of the milestone is the shared foundation that no later milestone wants to build twice — a GitHub OIDC provider with separate plan and apply roles, so that nothing in this repository ever holds a long-lived AWS key; a billing budget, because a project that stands infrastructure up daily should say so out loud when it costs more than expected; an account baseline; and a workflow that runs `fmt`, `validate`, and `plan` on every pull request.
+[account/](account/) holds what an account needs once and never again, and it is the first module to use that backend for something other than itself. It defines a GitHub OIDC provider with separate plan and apply roles, so that nothing here ever holds a long-lived AWS key. The plan role trusts pull requests and is read-only apart from taking a state lock — which is not a read, because S3-native locking makes the lock an object. The apply role trusts only `main` and may write state. Both carry a permanent deny on identity mutation, so no later policy can reopen the escalation path, and the apply role gets provisioning permissions one milestone at a time rather than all at once.
 
-`v0-bootstrap` is done when a pull request can plan against remote state using credentials that exist only for the life of the job.
+The same module defines a monthly cost budget that mails at 50% and 80% of actual spend and at 100% of forecast. A project that stands infrastructure up daily should say so out loud when it costs more than expected. The reasoning behind the thresholds, and the cost model they defend, are in [COST.md](COST.md).
+
+`account/` is applied by hand and stays that way. A CI role that can edit IAM can rewrite its own permissions, which would make the per-milestone scoping of the apply role decorative.
+
+What remains in the milestone is the account baseline — an account-level public access block, default EBS encryption, a password policy — and a workflow that runs `fmt`, `validate`, and `plan` on every pull request. `v0-bootstrap` is done when a pull request can plan against remote state using credentials that exist only for the life of the job.
+
+A few operations have no Terraform resource and no API worth automating: enabling Cost Explorer, activating cost allocation tags, answering an SNS confirmation mail. Those live in [RUNBOOK.md](RUNBOOK.md), each with the reason for it, the moment to do it, and a check — because a manual step has no plan output to read.
 
 ## About the infrastructure code
 

@@ -8,8 +8,9 @@ An operation in this file has three parts: the reason for it, the correct time t
 
 | Operation | Milestone | Status |
 | --- | --- | --- |
-| Enable Cost Explorer | `v0-bootstrap` | Not done |
-| Activate the cost allocation tags | `v0-bootstrap` | Not done |
+| Enable Cost Explorer | `v0-bootstrap` | Done |
+| Activate the cost allocation tags | `v0-bootstrap` | Done, 2026-08-28 |
+| Confirm the budget alert subscription | `v0-bootstrap` | Done, 2026-08-29 |
 
 ## The correct sequence
 
@@ -22,17 +23,17 @@ These two operations have a strict order. A tag key appears in the Billing conso
 | 3 | The four tag keys appear in the Billing console | Up to 24 hours |
 | 4 | Activate the four tag keys | Up to 24 hours |
 
-Step 2 is done. The `bootstrap` module is applied, and its six resources carry the four tags. Thus steps 1, 3, and 4 remain, and step 1 is the one that holds the rest.
+All four steps are complete. The sequence closed on 2026-08-28, before milestone `v1-network` created any resource with a real cost. No wait remains.
 
-Thus the time from step 1 to a tagged bill is up to three days. Start the sequence early. Milestone `v1-network` creates the first resources with a large cost, and you cannot tag that cost after the fact.
+The warning that this section carried is now spent, but keep it in mind for `v9-govern`. The sequence takes up to three days from a cold start, and you cannot tag a cost after the fact.
 
 ## Operation 1: Enable Cost Explorer
 
 **Reason.** Cost Explorer holds the cost history of the project. It also controls the cost allocation tags. The tag keys do not appear in the Billing console until Cost Explorer is active.
 
-**When.** Now, and the correct time has passed. The plan was to do this before the apply of the `bootstrap` module. That module is applied, thus the sequence below has started late.
+**When.** Done. Cost Explorer is active on account `749000381089`.
 
-This is not a fault that you can repair. Cost Explorer collects no data from the past. The cost of `bootstrap` is about $0, thus the loss is nothing. The condition is now urgent for a different reason: the four tag keys cannot appear until Cost Explorer is active, and the two waits after that are up to 24 hours each. Milestone `v1-network` makes the first resources with a real cost.
+The date of the activation is not recorded, and Cost Explorer does not report it. The service holds cost data for August 2026, thus it was active at least from the start of that month. This covers the whole life of the `bootstrap` module, so no cost of this project is missing from the history.
 
 **Steps.**
 
@@ -42,13 +43,24 @@ This is not a fault that you can repair. Cost Explorer collects no data from the
 
 **Check.** Open Cost Explorer again. The console must show a report page, and not the start page.
 
+The CLI gives a stronger check, because it tests the service and not the console:
+
+```bash
+aws ce get-cost-and-usage --time-period Start=2026-08-01,End=2026-08-28 \
+  --granularity MONTHLY --metrics UnblendedCost
+```
+
+An account without Cost Explorer returns `DataUnavailableException`. An account with it returns an amount. This account returns an amount.
+
 **Note.** Cost Explorer collects data from the day you enable it. It does not show the cost from before that day.
 
 ## Operation 2: Activate the cost allocation tags
 
 **Reason.** The `bootstrap` module applies four tags to each resource: `Project`, `Environment`, `ManagedBy`, and `Milestone`. These tags do not divide the bill until you activate them. The `Milestone` tag is the important one. It makes the bill show the cost of each milestone.
 
-**When.** After the tag keys appear in the console. This is up to 24 hours after you apply the `bootstrap` module.
+**When.** Done, on 2026-08-28.
+
+The activation happened in two parts, which is worth knowing because the first part looked complete and was not. `Project` and `ManagedBy` were activated on 2026-08-14. `Environment` and `Milestone` were left inactive and were found only by a later check. `Milestone` is the key that this operation exists for. A partial activation reports no error and shows no symptom until you read a bill that cannot break the cost down.
 
 **Conditions.** Two conditions must be true before you start:
 
@@ -70,9 +82,87 @@ This is not a fault that you can repair. Cost Explorer collects no data from the
 aws ce list-cost-allocation-tags --status Active
 ```
 
-The result must contain the four tag keys.
+The result must contain the four tag keys. It does.
+
+Note the price. Each request to the Cost Explorer API costs $0.01. The console is free, and so are the tags themselves. Thus a check of this kind is correct once, by hand, and wrong in a loop, a dashboard, or a scheduled job. The budget in step 5 is the free path to the same knowledge, because it pushes a notification instead of asking a question.
 
 **Note.** The activation applies only to future cost. AWS does not apply a tag to the cost from before the activation. If the four keys do not appear in the console, the cause is almost always one of the two conditions above.
+
+## Operation 3: Confirm the budget alert subscription
+
+**Reason.** The `account` module creates an SNS topic, an email subscription, and a budget. Terraform creates the subscription, but it cannot confirm it. AWS sends a mail with a link, and only the owner of the inbox can open that link. Until then the subscription holds the status `PendingConfirmation` and the topic delivers nothing.
+
+This is the failure that this operation exists to prevent. The apply reports success, the console shows the subscription, and the alert path is dead. The budget then passes a threshold in silence.
+
+**When.** After each apply that creates the subscription. This is normally once. It repeats if the subscription is destroyed, or if `budget_alert_email` changes, because a new address is a new subscription.
+
+Note also that AWS deletes a subscription that stays unconfirmed for three days. If you miss the mail, run `terraform apply` again to make a new one.
+
+**Steps.**
+
+1. Open the inbox named in `account/account.tfvars`.
+2. Find the mail from `no-reply@sns.amazonaws.com`, with the subject `AWS Notification - Subscription Confirmation`.
+3. Select the link **Confirm subscription**.
+4. Stop there. Read the warning below before you select anything else.
+
+The mail can land in the spam folder. It comes from an address that the inbox has not seen before.
+
+**Do not select an unsubscribe link.** The page that opens after a confirmation reads `Subscription confirmed!`, and it offers a link to unsubscribe. Each delivered notification carries the same link in its footer, and Gmail also shows its own **Unsubscribe** control beside the sender, because SNS sets the `List-Unsubscribe` header. Any of the three deactivates the subscription, and the inbox then receives a mail that begins `Your subscription to the topic below has been deactivated`.
+
+Close the tab at the confirmation page. The recovery, if this happens, is in the next section.
+
+**Check.** Read the `PendingConfirmation` attribute of the exact subscription that Terraform holds:
+
+```bash
+export AWS_PROFILE=dev
+
+aws sns get-subscription-attributes \
+  --subscription-arn "$(terraform -chdir=account state show \
+      aws_sns_topic_subscription.budget_alerts_email | awk '/^ *arn /{print $3}' | tr -d '\"')" \
+  --query 'Attributes.PendingConfirmation' --output text
+```
+
+`false` means the subscription is confirmed and delivers. `true` means the mail is not yet answered. A `NotFound` error means the subscription no longer exists.
+
+**Do not use `list-subscriptions-by-topic` for this.** That call was the first check written here, and it is wrong. It returns subscriptions that were destroyed, as an entry whose ARN is the literal string `Deleted`, and it can omit a live subscription entirely for a long time. On 2026-08-29 it reported a single `Deleted` entry while a confirmed subscription was working. A check that reports a dead subscription and hides a live one is worse than no check.
+
+The console is no better. It shows the subscription in every state.
+
+The stronger check tests delivery and not configuration, because a confirmed subscription still proves nothing about the topic policy:
+
+```bash
+aws sns publish \
+  --topic-arn "$(terraform -chdir=account output -raw budget_alert_topic_arn)" \
+  --subject "LinkForge test" --message "Test of the budget alert path."
+```
+
+The mail must arrive. This is the check that closes the third item of the `v0-bootstrap` definition of done.
+
+Run this test once only. Each delivered mail carries an unsubscribe link, thus each test creates another chance to break the subscription for no new knowledge.
+
+Note that this test publishes as `devops-admin`, and the budget publishes as the service principal `budgets.amazonaws.com`. Thus the test proves the subscription, and not the topic policy that lets Budgets in. The policy has no test short of a real threshold. Read it instead: it must allow `SNS:Publish` to that service principal, with `aws:SourceAccount` equal to this account.
+
+### Recovery from an unsubscribe
+
+Two facts make this worth its own section.
+
+**Terraform does not detect the deactivation.** The state holds the subscription, the API reports it as `Deleted`, and `terraform plan` reports `No changes`. Thus the alert path is dead and the plan says the account is correct. This is the strongest example in the project of a check that reassures and proves nothing.
+
+**Therefore `plan` is not a check for this resource.** Use `get-subscription-attributes`, as in the check above.
+
+Recover by forcing a replacement, because Terraform will not do it alone:
+
+```bash
+terraform -chdir=account apply \
+  -replace=aws_sns_topic_subscription.budget_alerts_email \
+  -var-file=account.tfvars
+```
+
+This destroys the dead subscription, creates a new one, and sends a new confirmation mail. Then return to the steps above.
+
+Expect **two** mails from a replacement, and read them in the correct order. The destroy sends `Your subscription to the topic below has been deactivated`, because SNS mails the endpoint whenever a subscription is removed, including a removal by Terraform. The create sends the new confirmation request. The deactivation mail refers to the old subscription and is not a fault. Answer the confirmation mail and ignore the other.
+
+The console offers a second path. SNS → Topics → `linkforge-budget-alerts` → Subscriptions → **Request confirmation**. That path sends the mail without touching the state, and it is correct when the subscription is `PendingConfirmation`. It is not correct when the subscription is `Deleted`, because there is no longer a subscription to confirm.
 
 ## A note for `v9-govern`
 
