@@ -8,8 +8,9 @@ An operation in this file has three parts: the reason for it, the correct time t
 
 | Operation | Milestone | Status |
 | --- | --- | --- |
-9| Enable Cost Explorer | `v0-bootstrap` | Done |
+| Enable Cost Explorer | `v0-bootstrap` | Done |
 | Activate the cost allocation tags | `v0-bootstrap` | Done, 2026-08-28 |
+| Confirm the budget alert subscription | `v0-bootstrap` | Done, 2026-08-29 |
 
 ## The correct sequence
 
@@ -86,6 +87,82 @@ The result must contain the four tag keys. It does.
 Note the price. Each request to the Cost Explorer API costs $0.01. The console is free, and so are the tags themselves. Thus a check of this kind is correct once, by hand, and wrong in a loop, a dashboard, or a scheduled job. The budget in step 5 is the free path to the same knowledge, because it pushes a notification instead of asking a question.
 
 **Note.** The activation applies only to future cost. AWS does not apply a tag to the cost from before the activation. If the four keys do not appear in the console, the cause is almost always one of the two conditions above.
+
+## Operation 3: Confirm the budget alert subscription
+
+**Reason.** The `account` module creates an SNS topic, an email subscription, and a budget. Terraform creates the subscription, but it cannot confirm it. AWS sends a mail with a link, and only the owner of the inbox can open that link. Until then the subscription holds the status `PendingConfirmation` and the topic delivers nothing.
+
+This is the failure that this operation exists to prevent. The apply reports success, the console shows the subscription, and the alert path is dead. The budget then passes a threshold in silence.
+
+**When.** After each apply that creates the subscription. This is normally once. It repeats if the subscription is destroyed, or if `budget_alert_email` changes, because a new address is a new subscription.
+
+Note also that AWS deletes a subscription that stays unconfirmed for three days. If you miss the mail, run `terraform apply` again to make a new one.
+
+**Steps.**
+
+1. Open the inbox named in `account/account.tfvars`.
+2. Find the mail from `no-reply@sns.amazonaws.com`, with the subject `AWS Notification - Subscription Confirmation`.
+3. Select the link **Confirm subscription**.
+4. Stop there. Read the warning below before you select anything else.
+
+The mail can land in the spam folder. It comes from an address that the inbox has not seen before.
+
+**Do not select an unsubscribe link.** The page that opens after a confirmation reads `Subscription confirmed!`, and it offers a link to unsubscribe. Each delivered notification carries the same link in its footer, and Gmail also shows its own **Unsubscribe** control beside the sender, because SNS sets the `List-Unsubscribe` header. Any of the three deactivates the subscription, and the inbox then receives a mail that begins `Your subscription to the topic below has been deactivated`.
+
+Close the tab at the confirmation page. The recovery, if this happens, is in the next section.
+
+**Check.** Read the `PendingConfirmation` attribute of the exact subscription that Terraform holds:
+
+```bash
+export AWS_PROFILE=dev
+
+aws sns get-subscription-attributes \
+  --subscription-arn "$(terraform -chdir=account state show \
+      aws_sns_topic_subscription.budget_alerts_email | awk '/^ *arn /{print $3}' | tr -d '\"')" \
+  --query 'Attributes.PendingConfirmation' --output text
+```
+
+`false` means the subscription is confirmed and delivers. `true` means the mail is not yet answered. A `NotFound` error means the subscription no longer exists.
+
+**Do not use `list-subscriptions-by-topic` for this.** That call was the first check written here, and it is wrong. It returns subscriptions that were destroyed, as an entry whose ARN is the literal string `Deleted`, and it can omit a live subscription entirely for a long time. On 2026-08-29 it reported a single `Deleted` entry while a confirmed subscription was working. A check that reports a dead subscription and hides a live one is worse than no check.
+
+The console is no better. It shows the subscription in every state.
+
+The stronger check tests delivery and not configuration, because a confirmed subscription still proves nothing about the topic policy:
+
+```bash
+aws sns publish \
+  --topic-arn "$(terraform -chdir=account output -raw budget_alert_topic_arn)" \
+  --subject "LinkForge test" --message "Test of the budget alert path."
+```
+
+The mail must arrive. This is the check that closes the third item of the `v0-bootstrap` definition of done.
+
+Run this test once only. Each delivered mail carries an unsubscribe link, thus each test creates another chance to break the subscription for no new knowledge.
+
+Note that this test publishes as `devops-admin`, and the budget publishes as the service principal `budgets.amazonaws.com`. Thus the test proves the subscription, and not the topic policy that lets Budgets in. The policy has no test short of a real threshold. Read it instead: it must allow `SNS:Publish` to that service principal, with `aws:SourceAccount` equal to this account.
+
+### Recovery from an unsubscribe
+
+Two facts make this worth its own section.
+
+**Terraform does not detect the deactivation.** The state holds the subscription, the API reports it as `Deleted`, and `terraform plan` reports `No changes`. Thus the alert path is dead and the plan says the account is correct. This is the strongest example in the project of a check that reassures and proves nothing.
+
+**Therefore `plan` is not a check for this resource.** Use `get-subscription-attributes`, as in the check above.
+
+Recover by forcing a replacement, because Terraform will not do it alone:
+
+```bash
+terraform -chdir=account apply \
+  -replace=aws_sns_topic_subscription.budget_alerts_email \
+  -var-file=account.tfvars
+```
+
+This destroys the dead subscription, creates a new one, and sends a new confirmation mail. Then return to the steps above.
+
+Expect **two** mails from a replacement, and read them in the correct order. The destroy sends `Your subscription to the topic below has been deactivated`, because SNS mails the endpoint whenever a subscription is removed, including a removal by Terraform. The create sends the new confirmation request. The deactivation mail refers to the old subscription and is not a fault. Answer the confirmation mail and ignore the other.
+
+The console offers a second path. SNS → Topics → `linkforge-budget-alerts` → Subscriptions → **Request confirmation**. That path sends the mail without touching the state, and it is correct when the subscription is `PendingConfirmation`. It is not correct when the subscription is `Deleted`, because there is no longer a subscription to confirm.
 
 ## A note for `v9-govern`
 

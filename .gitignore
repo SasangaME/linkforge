@@ -11,10 +11,10 @@ tfplan
 .terraform/
 .terragrunt-cache/
 
-# Real variable values. The example file is committed as a template.
+# Real variable values. Never committed. The required inputs and their
+# descriptions live in account/variables.tf.
 *.tfvars
 *.tfvars.json
-!example.tfvars
 
 # Crash dumps
 crash.log

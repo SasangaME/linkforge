@@ -101,8 +101,8 @@ The table above changes at the end of a milestone only. Thus it holds no detail 
 | 1 | The safety rails of the repository. The `.gitignore` file, written before the first apply | Done |
 | 2 | The `bootstrap` module. The S3 state bucket, applied with local state | Done |
 | 3 | The `backend` block, and the move of the state into the bucket | Done |
-| 4 | The GitHub OIDC provider, with a plan role and an apply role | Not started |
-| 5 | The billing limit. A budget, an SNS topic, and an email subscription | Not started |
+| 4 | The GitHub OIDC provider, with a plan role and an apply role | Done |
+| 5 | The billing limit. A budget, an SNS topic, and an email subscription | Done |
 | 6 | The account baseline. Public access block, EBS encryption, password policy | Not started |
 | 7 | The first workflow. `fmt`, `validate`, and `plan` on each pull request | Not started |
 
@@ -110,6 +110,6 @@ Steps 1 to 3 give a state backend that holds its own state. This is the part tha
 
 Steps 4 and 7 are one test in two parts. Step 4 makes the roles. Step 7 proves that they work. `v0-bootstrap` is complete when a pull request makes a plan that reads the state from S3 with OIDC credentials, and no identity in the pipeline holds an access key.
 
-Two operations of this milestone are not Terraform code. They are in [RUNBOOK.md](RUNBOOK.md), and both are late. Cost Explorer must be active before milestone `v1-network` makes the first resources with a real cost.
+Three operations of this milestone are not Terraform code. They are in [RUNBOOK.md](RUNBOOK.md), and all three are done. Cost Explorer and the cost allocation tags closed on 2026-08-28, before milestone `v1-network` makes the first resources with a real cost. The budget alert subscription was confirmed on 2026-08-29.
 
 
