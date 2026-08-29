@@ -71,9 +71,15 @@ The same module defines a monthly cost budget that mails at 50% and 80% of actua
 
 `account/` is applied by hand and stays that way. A CI role that can edit IAM can rewrite its own permissions, which would make the per-milestone scoping of the apply role decorative.
 
-What remains in the milestone is the account baseline — an account-level public access block, default EBS encryption, a password policy — and a workflow that runs `fmt`, `validate`, and `plan` on every pull request. `v0-bootstrap` is done when a pull request can plan against remote state using credentials that exist only for the life of the job.
+[.github/workflows/plan.yml](.github/workflows/plan.yml) is what turns those two roles from an assertion into something tested. Every pull request into `main` runs `fmt`, `validate` and `plan` under the plan role, and no long-lived AWS key exists in the repository or in Actions for it to fall back on.
 
-A few operations have no Terraform resource and no API worth automating: enabling Cost Explorer, activating cost allocation tags, answering an SNS confirmation mail. Those live in [RUNBOOK.md](RUNBOOK.md), each with the reason for it, the moment to do it, and a check — because a manual step has no plan output to read.
+The trigger is `pull_request` and could not be anything else. GitHub writes the triggering event into the OIDC token's subject claim, and the trust policy pins that exact string — so a push carries a different subject and fails at STS, before AWS evaluates a single permission. The workflow trigger and the IAM trust policy are one decision written in two places, which is also why a pull request from a fork, getting no token at all, cannot reach this account.
+
+It plans `bootstrap/` rather than `account/`. `bootstrap/` takes no variables and holds no secrets, so its plan output is safe to read in a public log; `account/` would need its alert address passed in as a secret and would then print it in plaintext on the pull request. Making that work meant removing the `profile` argument from `bootstrap/`, since a named local profile does not exist on a runner — both modules now resolve credentials from the environment alone, which is the one mechanism that is correct in both places.
+
+What remains in the milestone is the account baseline — an account-level public access block, default EBS encryption, a password policy. `v0-bootstrap` is done when a pull request can plan against remote state using credentials that exist only for the life of the job.
+
+A few operations have no Terraform resource and no API worth automating: enabling Cost Explorer, activating cost allocation tags, answering an SNS confirmation mail, handing the workflow its role ARN. Those live in [RUNBOOK.md](RUNBOOK.md), each with the reason for it, the moment to do it, and a check — because a manual step has no plan output to read.
 
 ## About the infrastructure code
 
