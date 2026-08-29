@@ -39,3 +39,17 @@ output "nat_gateway_public_ips" {
   description = "Empty in dev. The addresses an egress allowlist would name, if anything ever needs one."
   value       = aws_eip.nat[*].public_ip
 }
+
+output "endpoint_security_group_id" {
+  description = "The group on the interface endpoint ENIs. Anything that needs to reach the endpoints must be inside the VPC CIDR; this is here for the reverse case, a rule written against the endpoints rather than against the network."
+  value       = aws_security_group.endpoints.id
+}
+
+# Empty in dev, where no interface endpoints exist. Keyed by service short name
+# so the debugging step reads directly: compare what the endpoint claims here to
+# what the host actually resolves ssm.<region>.amazonaws.com to. A public address
+# on the host means private DNS never took effect.
+output "interface_endpoint_dns_names" {
+  description = "DNS names each interface endpoint answers to, keyed by service."
+  value       = { for name, ep in aws_vpc_endpoint.interface : name => ep.dns_entry[*].dns_name }
+}

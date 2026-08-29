@@ -123,26 +123,49 @@ They differ in exactly one dimension: what is allowed to cost money while idle.
 | --- | --- | --- | --- |
 | Availability zones | 2 | 2 | 2 |
 | NAT gateway | None | One, shared | One per zone |
+| Interface endpoints | Three, in one zone | None | None |
 | Load balancer | One | One | One |
-| Standing cost | ~$16 | ~$49 | ~$82 |
+| Cost per hour | ~$0.053 | ~$0.073 | ~$0.113 |
+| Standing cost | ~$38 | ~$49 | ~$82 |
 
-`dev` reaches AWS APIs through interface endpoints rather than a NAT gateway,
-which removes the single largest hourly cost in `v1-network`. It does not make
-dev free — the load balancer is still about $16 a month, still above the
-budget — so dev is destroyed at the end of the day like everything else. What
-changes is that the resource forcing that habit is now the load balancer.
+`dev` reaches AWS APIs through interface endpoints rather than a NAT gateway.
+
+This paragraph used to say that doing so removes the single largest hourly cost
+in `v1-network`, and put dev at about $16. Both were wrong, because an interface
+endpoint is billed for every zone it is placed in and the endpoints were never
+added to the figure. Three endpoints across two zones is about $44 a month
+against a NAT gateway's $33 — which made dev, on paper the cheapest environment
+here, the most expensive one in the project.
+
+What fixes it is placing dev's endpoints in **one** zone, about $22, which is
+what `interface_endpoint_az_count` exists to say. The subnets stay in two zones
+because a load balancer will not accept one and a subnet is free. The price of
+the single zone is not money: a fault in that zone costs dev its SSM access
+entirely, which is the right trade in an environment rebuilt daily and the wrong
+one anywhere else.
+
+Dev is still destroyed at the end of the day. About $38 a month is well above
+the budget, and the load balancer alone would be. What the correction changed is
+the size of the number, not the habit — and because the habit is the control,
+`v1-network` step 9 stops leaving it to memory. At about five cents an hour, a
+two-hour session is ten cents and a forgotten month is $38; the whole difference
+is hours, and nothing in Terraform decides those.
 
 `stage` matches prod's topology at the smallest size that still has the
 topology. One NAT gateway is a single point of failure, which is acceptable in
 an environment whose job is to prove the graph is correct, and not acceptable in
 prod.
 
-This asymmetry has to be an *input* to the network module — something like
-`az_count` and a NAT-gateway count — and never three divergent copies of the
-module. A staging environment that differs from prod in its code rather than in
-its arguments is not testing prod. That constraint belongs to whoever writes
-`modules/network` in `v1-network`; it is written here because it is a property
-of the environments, not of the module.
+This asymmetry has to be an *input* to the network module and never three
+divergent copies of it. A staging environment that differs from prod in its code
+rather than in its arguments is not testing prod.
+
+[`modules/network`](../modules/network/) now carries it as three arguments:
+`az_count`, `nat_gateway_count`, and `interface_endpoint_az_count`. The last two
+default to zero together, which the module rejects — an environment with neither
+has no route from its private subnets to the AWS APIs, and it is a mistake that
+applies cleanly and fails silently. Every column of the table above is four
+numbers in a stack file and nothing else.
 
 ## Terragrunt
 

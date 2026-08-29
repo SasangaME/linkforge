@@ -100,12 +100,13 @@ The table above changes at the end of a milestone only. Thus it holds no detail 
 | --- | --- | --- |
 | 1 | The `dev` GitHub Environment, with its deployment branch rule | Done |
 | 2 | `modules/network`. The VPC, the subnets, and the difference between the environments expressed as arguments | Done |
-| 3 | The interface endpoints that let `dev` reach the AWS APIs without a NAT gateway | Not started |
+| 3 | The interface endpoints that let `dev` reach the AWS APIs without a NAT gateway | Done |
 | 4 | The host in a private subnet, reached over SSM. No key pair, no bastion, no inbound rule | Not started |
 | 5 | The load balancer, and a target group that health checks `/health` | Not started |
 | 6 | `live/dev/network`, applied. `live/stage/network` and `live/prod/network`, written and validated only | Not started |
 | 7 | The first workflow that applies. It declares `environment: dev`, and it is what tests step 1 | Not started |
 | 8 | The Terragrunt decision, once the same backend block stands in three directories | Not started |
+| 9 | The scheduled destroy of `dev`. The environment becomes ephemeral by construction rather than by memory | Not started |
 
 Step 1 is the only step of this milestone that is not code. It is [RUNBOOK.md](RUNBOOK.md) operation 5, and it blocks every step after it: an apply role whose trust policy pins `:environment:dev` cannot be assumed until an environment of that name exists to put the claim in the token.
 
@@ -113,13 +114,21 @@ Steps 1 and 7 are one test in two parts, in the same shape as steps 4 and 7 of `
 
 Step 2 is written and merged, which is not the same as applied. Nothing calls the module until step 6, and until then the only thing checking it is `terraform validate` in CI. See [modules/network/README.md](modules/network/README.md) for the address plan and for why the subnet width is a constant rather than a function of `az_count`.
 
-Steps 2 and 3 carry the cost decision. The three environments differ in one dimension only, which is what is allowed to cost money while idle, and that difference has to arrive as an input to the module rather than as three copies of it. `dev` has no NAT gateway and reaches the AWS APIs through interface endpoints instead, which removes about $33 of the $50 monthly standing cost. The load balancer in step 5 keeps the environment above the $10 budget regardless, so the daily destroy starts here and does not stop.
+Steps 2 and 3 carry the cost decision. The three environments differ in one dimension only, which is what is allowed to cost money while idle, and that difference has to arrive as an input to the module rather than as three copies of it.
+
+The arithmetic behind that difference was wrong until this milestone checked it, and the corrected version is the reason step 9 exists. An interface endpoint is billed for each availability zone it is placed in, so three endpoints across two zones is about $44 each month against a NAT gateway's $33 — endpoints are cheaper than a NAT gateway in a one-zone diagram and dearer in a two-zone one. `dev` places its endpoints in a single zone, which brings that to about $22 and makes the claim true; the subnets stay in two zones because the load balancer in step 5 requires it. A single-zone endpoint means a zone fault costs `dev` its SSM access, which is the right trade in an environment that is rebuilt daily.
+
+What that leaves is roughly six cents an hour for the whole of `dev`. Two hours a day is about $3 each month and the same environment forgotten for a month is about $38, so the number that decides the bill is not in any `.tf` file. That is step 9.
 
 Step 4 is the reason the private subnets are worth building before there is an application. The host answers `/health` and nothing else. Its job is to prove that a machine with no public address, no inbound rule and no key pair is reachable, and that the endpoints in step 3 are what makes it so.
 
 Step 6 is where the addressing fixed in `v0-bootstrap` is spent. `dev` is `10.0.0.0/16`, `stage` is `10.1.0.0/16`, `prod` is `10.2.0.0/16`, and only the first is applied. See [live/README.md](live/README.md) for the layout and for what makes an unapplied environment unreachable rather than merely unbuilt.
 
 Step 8 is a decision and possibly no change. Terragrunt was deferred in `v0-bootstrap` because the duplication it removes did not exist yet. Step 6 creates it. Revisit it there rather than assuming either answer.
+
+Step 9 makes the daily destroy a property of the repository rather than a habit. Every cost in this milestone is hourly, so `dev` is cheap when it is short-lived and the only thing keeping it short-lived today is memory. A scheduled workflow that destroys `live/dev/network` overnight turns a forgotten environment into one evening rather than one month, and returns the $10 budget alarm to being a backstop instead of the primary control.
+
+It comes after step 7 because it needs the same apply role and the same `environment: dev` declaration, and it is the second job to prove that path. Two things about it are worth deciding rather than discovering: a schedule reaches AWS with nobody watching, so the destroy is scoped to the one stack by path and never runs `-auto-approve` against anything under `live/stage` or `live/prod`; and `stage` and `prod` are safe from it for the same reason they are unbuilt, which is that no environment exists to mint them a token.
 
 ### Inside `v0-bootstrap`, closed 2026-08-29
 
