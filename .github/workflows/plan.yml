@@ -73,6 +73,11 @@ jobs:
       # "to add" on every pull request forever, and a plan nobody reads is
       # worse than no plan at all.
       #
+      # modules/ is walked too, even though nothing calls a module until
+      # live/dev/network exists. A module directory validates standalone —
+      # validate needs no variable values — so this is the only check on a
+      # module written in one pull request and first called in another.
+      #
       # The loop discovers stacks rather than listing them, so `v1-network`
       # adding live/dev/network needs no edit here. It exits cleanly while
       # live/ is still empty.
@@ -84,7 +89,7 @@ jobs:
           # check that only exists inside CI is a check you stop trusting.
           # Stack paths are lowercase and contain no spaces; live/README.md
           # says so and the environments variable validates it.
-          stacks="$(find account live -name '*.tf' -exec dirname {} \; | sort -u)"
+          stacks="$(find account live modules -name '*.tf' -exec dirname {} \; | sort -u)"
           if [ -z "$stacks" ]; then
             echo "no stacks to validate yet"
             exit 0

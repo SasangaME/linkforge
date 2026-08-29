@@ -99,7 +99,7 @@ The table above changes at the end of a milestone only. Thus it holds no detail 
 | Step | Work | Status |
 | --- | --- | --- |
 | 1 | The `dev` GitHub Environment, with its deployment branch rule | Done |
-| 2 | `modules/network`. The VPC, the subnets, and the difference between the environments expressed as arguments | Not started |
+| 2 | `modules/network`. The VPC, the subnets, and the difference between the environments expressed as arguments | Done |
 | 3 | The interface endpoints that let `dev` reach the AWS APIs without a NAT gateway | Not started |
 | 4 | The host in a private subnet, reached over SSM. No key pair, no bastion, no inbound rule | Not started |
 | 5 | The load balancer, and a target group that health checks `/health` | Not started |
@@ -110,6 +110,8 @@ The table above changes at the end of a milestone only. Thus it holds no detail 
 Step 1 is the only step of this milestone that is not code. It is [RUNBOOK.md](RUNBOOK.md) operation 5, and it blocks every step after it: an apply role whose trust policy pins `:environment:dev` cannot be assumed until an environment of that name exists to put the claim in the token.
 
 Steps 1 and 7 are one test in two parts, in the same shape as steps 4 and 7 of `v0-bootstrap`. Step 1 creates the environment. Step 7 is the first job that declares one, and until it runs, the claim the per-environment trust policies rest on — that GitHub writes the environment in place of the ref rather than beside it — is an assumption. A settings page proves the environment exists. It does not prove that the subject GitHub sends is the subject IAM was told to expect.
+
+Step 2 is written and merged, which is not the same as applied. Nothing calls the module until step 6, and until then the only thing checking it is `terraform validate` in CI. See [modules/network/README.md](modules/network/README.md) for the address plan and for why the subnet width is a constant rather than a function of `az_count`.
 
 Steps 2 and 3 carry the cost decision. The three environments differ in one dimension only, which is what is allowed to cost money while idle, and that difference has to arrive as an input to the module rather than as three copies of it. `dev` has no NAT gateway and reaches the AWS APIs through interface endpoints instead, which removes about $33 of the $50 monthly standing cost. The load balancer in step 5 keeps the environment above the $10 budget regardless, so the daily destroy starts here and does not stop.
 
