@@ -103,9 +103,9 @@ The table above changes at the end of a milestone only. Thus it holds no detail 
 | 3 | The `backend` block, and the move of the state into the bucket | Done |
 | 4 | The GitHub OIDC provider, with a plan role and an apply role | Done |
 | 5 | The billing limit. A budget, an SNS topic, and an email subscription | Done |
-| 6 | The account baseline. Public access block, EBS encryption, password policy | Not started |
+| 6 | The account baseline. Public access block, EBS encryption, password policy | Written, pending apply |
 | 7 | The first workflow. `fmt`, `validate`, and `plan` on each pull request | Done |
-| 8 | The environment split. `dev`, `stage`, and `prod` defined; `dev` alone applied | Written, pending apply |
+| 8 | The environment split. `dev`, `stage`, and `prod` defined; `dev` alone applied | Done |
 
 Steps 1 to 3 give a state backend that holds its own state. This is the part that each later milestone uses.
 
