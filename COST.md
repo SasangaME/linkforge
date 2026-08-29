@@ -79,6 +79,33 @@ Cost Explorer answers the question about each milestone, and it uses the tags. A
 
 The budget must send alerts only. A budget action can stop resources automatically. This function is not correct for this project. It moves the budget into the paid class. It also adds an automatic destroy operation to an account that you use to learn. Examine this function again at `v9-govern`. Cost control is the subject of that milestone.
 
+## Three environments, one of them built
+
+The repository defines `dev`, `stage`, and `prod`. It applies `dev` only.
+
+The arithmetic is the whole argument. Milestone `v1-network` has a standing cost of about $50 each month: about $33 for the NAT Gateway and about $16 for the load balancer. Three copies is about $150 each month. The budget is $10.
+
+The daily destroy does not solve this. It solves the cost of an environment you work in, because you destroy that environment at the end of the day. It does not solve the cost of two environments you do not work in, because you never stand them up to destroy them. The cheapest environment is the one that is only code.
+
+Thus the three environments are not the same shape.
+
+| | `dev` | `stage` | `prod` |
+| --- | --- | --- | --- |
+| Applied | Yes | No | No |
+| NAT Gateway | None | One, shared | One for each zone |
+| Load balancer | One | One | One |
+| Standing cost | About $16 | About $49 | About $82 |
+
+`dev` reaches the AWS APIs through interface endpoints and not through a NAT Gateway. This removes the largest hourly cost of `v1-network`.
+
+It does not remove the need to destroy. About $16 each month is still more than the $10 budget, because the load balancer remains. A NAT-free `dev` is cheaper by two thirds, and it is not free. The daily destroy stays, and the resource that makes it necessary is now the load balancer and not the NAT Gateway.
+
+Two rules follow, and both are about correctness and not about cost.
+
+The difference between the environments must be an argument to a module, and never a second copy of the module. An environment that differs from production in its code does not test production. It tests itself.
+
+The `stage` and `prod` columns are the shape those environments will have on the day they are built. They are not a cost today. Write the numbers before the environment exists, because an estimate written after the first bill is not an estimate.
+
 ## Cost allocation tags
 
 The tag set is `Project`, `Environment`, `ManagedBy`, and `Milestone`. The `Milestone` tag is the important one. It makes the bill show the cost of each milestone.

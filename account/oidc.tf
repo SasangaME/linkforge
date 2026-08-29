@@ -50,9 +50,24 @@ data "aws_iam_policy_document" "gha_plan_trust" {
   }
 }
 
+# The apply role is per environment, and the claim it pins is not the branch.
+# A job that declares `environment: dev` gets a subject ending in
+# :environment:dev — the ref segment is replaced, not appended. Both cannot be
+# pinned at once, so the branch requirement moves to the environment's
+# deployment branch policy in GitHub, and the reviewer that guards prod moves
+# there too. The trigger, the `environment:` key and this trust policy are now
+# one decision written in three places.
+#
+# All three roles exist from the start; only dev is reachable. GitHub will not
+# mint a token carrying a claim for an environment it holds no record of, so a
+# role whose GitHub Environment has not been created cannot be assumed by
+# anyone. That, rather than a commented-out resource, is what keeps stage and
+# prod inert while only dev is applied. See RUNBOOK.md, operation 5.
 data "aws_iam_policy_document" "gha_apply_trust" {
+  for_each = toset(var.environments)
+
   statement {
-    sid     = "GitHubActionsMainBranch"
+    sid     = "GitHubActionsEnvironment"
     effect  = "Allow"
     actions = ["sts:AssumeRoleWithWebIdentity"]
 
@@ -70,7 +85,7 @@ data "aws_iam_policy_document" "gha_apply_trust" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["${local.github_subject}:ref:refs/heads/main"]
+      values   = ["${local.github_subject}:environment:${each.key}"]
     }
   }
 }

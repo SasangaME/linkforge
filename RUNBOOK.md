@@ -12,6 +12,7 @@ An operation in this file has three parts: the reason for it, the correct time t
 | Activate the cost allocation tags | `v0-bootstrap` | Done, 2026-08-28 |
 | Confirm the budget alert subscription | `v0-bootstrap` | Done, 2026-08-29 |
 | Set the plan role repository variable | `v0-bootstrap` | Done, 2026-08-29 |
+| Create the GitHub Environments | `v0-bootstrap` | Not started |
 
 ## The correct sequence
 
@@ -212,6 +213,71 @@ arn:aws:sts::749000381089:assumed-role/linkforge-gha-plan/linkforge-plan-<run id
 Any other identity means the variable holds the wrong ARN.
 
 **The failure signature when it is unset.** This is worth knowing, because the message does not name the cause. An unset variable expands to an empty string, so `role-to-assume` is empty, and `configure-aws-credentials` fails with a complaint about credentials rather than about a missing variable. If that step fails on a fresh repository, check this operation first.
+
+## Operation 5: Create the GitHub Environments
+
+**Reason.** This is the gate that decides which environments can be deployed and from which branches, and it is the only one. It is worth being precise about why it lives in GitHub rather than in Terraform.
+
+An apply role's trust policy pins the OIDC token's subject claim. For a job that declares `environment: dev`, GitHub writes that subject as:
+
+```
+repo:SasangaME@12818777/linkforge@1330896942:environment:dev
+```
+
+There is no branch in it. The environment name replaces the ref segment rather than joining it, so `linkforge-gha-apply-dev` cannot pin `refs/heads/main` and `environment:dev` at the same time — the ref is simply not in the token to pin.
+
+This is the one control in the project that AWS cannot enforce. Everywhere else, GitHub asserts and IAM verifies. Here IAM has nothing to verify against, so the branch requirement is enforced entirely by the environment's deployment branch policy, before a token is minted at all. If that policy is not set, any branch can request the environment and receive a valid token for it.
+
+The useful half of the same fact: an environment that does not exist in GitHub cannot produce a token that names it. `linkforge-gha-apply-stage` and `linkforge-gha-apply-prod` are applied, hold their policies, and are assumable by nobody. Their inertness is enforced by GitHub, not by a commented-out resource in this repository, which is why all three roles exist in code while only one environment does.
+
+**Which branch reaches which environment.**
+
+| Environment | Deployment branches | Reviewer | Created |
+| --- | --- | --- | --- |
+| `dev` | `main` | None | Now |
+| `stage` | `release/*` | None | On promotion |
+| `prod` | `release/*` | Required | On promotion |
+
+A merge to `main` reaches `dev`. A release branch cut from `main` reaches `stage` and then `prod`. The version in the branch name is the release identity — `release/1.02` — and the pattern that matches it is `release/*`, because a deployment branch pattern is a name pattern and not a regular expression. Its `*` does not cross a `/`, so `release/*` matches `release/1.02` and does not match `release/1.02/hotfix`. There is no way to say "two digits, a dot, two digits" here, and a tighter pattern is not what makes this safe.
+
+**What actually separates stage from prod.** Not the branch — they share one. `release/1.02` that can deploy to stage can deploy to prod, and the only thing between them is the required reviewer on prod. That is the correct design and it is worth saying out loud, because a shared branch pattern looks like a gate and is not one. The reviewer is the gate. The branch pattern decides which commits are *candidates*.
+
+Which makes the creation of a `release/*` branch the real perimeter. Anyone with write access can create one, and creating one puts a commit within reach of prod. Close that with a ruleset — step 6 below.
+
+**When.** `dev` once, before the first workflow job that applies anything. Not needed by [.github/workflows/plan.yml](.github/workflows/plan.yml), which declares no environment and uses the plan role. `stage` and `prod` on the day each is promoted; that promotion is this operation and nothing else.
+
+**Steps.**
+
+1. Open `https://github.com/SasangaME/linkforge/settings/environments`.
+2. Select **New environment**, name it `dev`, and select **Configure environment**.
+3. Under **Deployment branches and tags**, select **Selected branches and tags**, then add a rule for `main`.
+
+   This is the check that the old `refs/heads/main` condition in the trust policy used to make. It is not optional, and AWS will not catch its absence.
+4. Leave **Required reviewers** unset for `dev`. Iteration should not need an approval.
+5. Add no environment secrets. Nothing here holds credentials; the role ARN is a repository variable, as in operation 4.
+
+For `stage` and `prod`, on the day they are promoted, repeat with two differences:
+
+- the deployment branch rule is `release/*` rather than `main`;
+- `prod` gets a **required reviewer**, and `stage` does not.
+
+6. Restrict who can create a release branch. Open `https://github.com/SasangaME/linkforge/settings/rules`, add a ruleset targeting the branch pattern `release/*`, and enable **Restrict creations** with a bypass list holding only the identities allowed to cut a release.
+
+   This is not decoration. With `release/*` as the deployment branch pattern for prod, the ability to create such a branch is the ability to put a commit in front of the prod reviewer. Restricting the pattern in the environment while leaving branch creation open moves the control without applying it.
+
+**Check.** The weak check is the settings page: each environment appears, with its branch rule listed, and `prod` shows a required reviewer.
+
+The strong check needs a job that declares the environment, and there is none until `v1-network`. When there is, its `whoami` step must print:
+
+```
+arn:aws:sts::749000381089:assumed-role/linkforge-gha-apply-dev/<session name>
+```
+
+Until then, the useful negative check is that `stage` and `prod` do not appear on that page. That absence is what makes their roles unreachable, so confirm it deliberately rather than assuming it.
+
+**The failure signature.** `Not authorized to perform sts:AssumeRoleWithWebIdentity`, identical to a wrong subject and to a missing environment, because STS never names the claim that failed. If a job declaring an environment cannot assume its role, check this page before rereading the trust policy — and if it still fails, print the token's `sub` and `aud` claims, never the token, exactly as step 7 did.
+
+**The option not taken.** GitHub can be told to include the `ref` claim in the subject, through the OIDC subject claim customization API, which would put the branch back within reach of an IAM condition and give this control a second enforcement point. It is deferred for two reasons. The customization is repository-wide, so it rewrites the subject for every token including the plan role's, which would mean re-deriving a trust policy that already cost one debugging session to get right. And the branch is already enforced before the token exists — a second check on a claim GitHub has already decided is defence in depth, not a missing control. Revisit at `v3-pipeline`, where the apply path becomes real.
 
 ## A note for `v9-govern`
 
