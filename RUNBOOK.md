@@ -11,7 +11,7 @@ An operation in this file has three parts: the reason for it, the correct time t
 | Enable Cost Explorer | `v0-bootstrap` | Done |
 | Activate the cost allocation tags | `v0-bootstrap` | Done, 2026-08-28 |
 | Confirm the budget alert subscription | `v0-bootstrap` | Done, 2026-08-29 |
-| Set the plan role repository variable | `v0-bootstrap` | Pending |
+| Set the plan role repository variable | `v0-bootstrap` | Done, 2026-08-29 |
 
 ## The correct sequence
 
