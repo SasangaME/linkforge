@@ -81,7 +81,7 @@ The application does not change for scale. It must only be stateless. Milestone 
 | Tag | Status |
 | --- | --- |
 | `v0-bootstrap` | Complete, 2026-08-29 |
-| `v1-network` | Not started |
+| `v1-network` | In progress |
 | `v2-fargate` | Not started |
 | `v3-pipeline` | Not started |
 | `v4-state` | Not started |
@@ -92,9 +92,34 @@ The application does not change for scale. It must only be stateless. Milestone 
 | `v9-govern` | Not started |
 | `v10-resilient` | Not started |
 
-The table above changes at the end of a milestone only. Thus it holds no detail during a milestone. The next table gives that detail for the milestone in progress.
+The table above changes at the end of a milestone only. Thus it holds no detail during a milestone. The tables below give that detail: the milestone in progress first, then the one most recently closed.
 
-### Inside `v0-bootstrap`
+### Inside `v1-network`
+
+| Step | Work | Status |
+| --- | --- | --- |
+| 1 | The `dev` GitHub Environment, with its deployment branch rule | Done |
+| 2 | `modules/network`. The VPC, the subnets, and the difference between the environments expressed as arguments | Not started |
+| 3 | The interface endpoints that let `dev` reach the AWS APIs without a NAT gateway | Not started |
+| 4 | The host in a private subnet, reached over SSM. No key pair, no bastion, no inbound rule | Not started |
+| 5 | The load balancer, and a target group that health checks `/health` | Not started |
+| 6 | `live/dev/network`, applied. `live/stage/network` and `live/prod/network`, written and validated only | Not started |
+| 7 | The first workflow that applies. It declares `environment: dev`, and it is what tests step 1 | Not started |
+| 8 | The Terragrunt decision, once the same backend block stands in three directories | Not started |
+
+Step 1 is the only step of this milestone that is not code. It is [RUNBOOK.md](RUNBOOK.md) operation 5, and it blocks every step after it: an apply role whose trust policy pins `:environment:dev` cannot be assumed until an environment of that name exists to put the claim in the token.
+
+Steps 1 and 7 are one test in two parts, in the same shape as steps 4 and 7 of `v0-bootstrap`. Step 1 creates the environment. Step 7 is the first job that declares one, and until it runs, the claim the per-environment trust policies rest on — that GitHub writes the environment in place of the ref rather than beside it — is an assumption. A settings page proves the environment exists. It does not prove that the subject GitHub sends is the subject IAM was told to expect.
+
+Steps 2 and 3 carry the cost decision. The three environments differ in one dimension only, which is what is allowed to cost money while idle, and that difference has to arrive as an input to the module rather than as three copies of it. `dev` has no NAT gateway and reaches the AWS APIs through interface endpoints instead, which removes about $33 of the $50 monthly standing cost. The load balancer in step 5 keeps the environment above the $10 budget regardless, so the daily destroy starts here and does not stop.
+
+Step 4 is the reason the private subnets are worth building before there is an application. The host answers `/health` and nothing else. Its job is to prove that a machine with no public address, no inbound rule and no key pair is reachable, and that the endpoints in step 3 are what makes it so.
+
+Step 6 is where the addressing fixed in `v0-bootstrap` is spent. `dev` is `10.0.0.0/16`, `stage` is `10.1.0.0/16`, `prod` is `10.2.0.0/16`, and only the first is applied. See [live/README.md](live/README.md) for the layout and for what makes an unapplied environment unreachable rather than merely unbuilt.
+
+Step 8 is a decision and possibly no change. Terragrunt was deferred in `v0-bootstrap` because the duplication it removes did not exist yet. Step 6 creates it. Revisit it there rather than assuming either answer.
+
+### Inside `v0-bootstrap`, closed 2026-08-29
 
 | Step | Work | Status |
 | --- | --- | --- |
@@ -113,10 +138,6 @@ Steps 4 and 7 are one test in two parts. Step 4 makes the roles. Step 7 proves t
 
 Step 8 is placed inside `v0-bootstrap` and not inside `v1-network` for one reason. The first resource with an address is created in `v1-network`, and a VPC CIDR cannot be changed after that — a correction destroys the VPC and everything holding an address in it. The same is true of the module interface: an environment that differs from production in its code rather than in its arguments is not testing production, and that is a property you build in or lose. Both are free to decide now and expensive to decide later.
 
-Only `dev` is applied. `stage` and `prod` are written, validated on every pull request, and never built, because three copies of `v1-network` cost about $150 each month against a $10 budget. See [live/README.md](live/README.md) for the layout, the address allocation, and what makes an unapplied environment unreachable rather than merely unbuilt.
-
 Five operations of this milestone are not Terraform code. They are in [RUNBOOK.md](RUNBOOK.md), and all five are done. Cost Explorer and the cost allocation tags closed on 2026-08-28, before milestone `v1-network` makes the first resources with a real cost. The budget alert subscription and the plan role repository variable were confirmed on 2026-08-29, and the account module was applied by hand the same day.
 
 The sixth operation, creating the GitHub Environments, belongs to `v1-network` and not here. Nothing in `v0-bootstrap` applies anything, so no job in this milestone ever declares an environment or needs a token that names one.
-
-
