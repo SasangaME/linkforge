@@ -12,7 +12,7 @@ An operation in this file has three parts: the reason for it, the correct time t
 | Activate the cost allocation tags | `v0-bootstrap` | Done, 2026-08-28 |
 | Confirm the budget alert subscription | `v0-bootstrap` | Done, 2026-08-29 |
 | Set the plan role repository variable | `v0-bootstrap` | Done, 2026-08-29 |
-| Create the GitHub Environments | `v1-network` | Not started |
+| Create the GitHub Environments | `v1-network` | `dev` done, 2026-08-29. `stage` and `prod` on promotion |
 | Apply the `account` module by hand | `v0-bootstrap` onward | Done, 2026-08-29 |
 
 ## The correct sequence
@@ -249,13 +249,18 @@ Which makes the creation of a `release/*` branch the real perimeter. Anyone with
 
 That first job arrives in `v1-network`, which is why this operation is tagged to that milestone and not left as a loose end of `v0-bootstrap`. Nothing in `v0-bootstrap` applies anything, so v0 closed without it correctly rather than in spite of it. It is the first step of `v1-network` and it blocks the rest.
 
+`dev` was created on 2026-08-29, with a single deployment branch rule for `main` and
+no required reviewer. `stage` and `prod` do not exist.
+
 **Steps.**
 
 1. Open `https://github.com/SasangaME/linkforge/settings/environments`.
 2. Select **New environment**, name it `dev`, and select **Configure environment**.
-3. Under **Deployment branches and tags**, select **Selected branches and tags**, then add a rule for `main`.
+3. Under **Deployment branches and tags**, select **Selected branches and tags**, then add a rule with ref type **Branch** and the name pattern `main`.
 
    This is the check that the old `refs/heads/main` condition in the trust policy used to make. It is not optional, and AWS will not catch its absence.
+
+   The pattern is the literal string `main`. It is matched against the short branch name, so `refs/heads/main` matches nothing — and a rule that matches no branch does not fail open, it rejects every deployment, which is at least a loud failure. Multiple rules are a union, so a second rule only widens what can reach the environment.
 4. Leave **Required reviewers** unset for `dev`. Iteration should not need an approval.
 5. Add no environment secrets. Nothing here holds credentials; the role ARN is a repository variable, as in operation 4.
 
@@ -277,6 +282,8 @@ arn:aws:sts::749000381089:assumed-role/linkforge-gha-apply-dev/<session name>
 ```
 
 Until then, the useful negative check is that `stage` and `prod` do not appear on that page. That absence is what makes their roles unreachable, so confirm it deliberately rather than assuming it.
+
+**Where this stands.** The weak check passed for `dev` on 2026-08-29, and the negative check with it: the settings page lists `dev` with its `main` rule and no reviewer, and lists nothing else. The strong check is still outstanding, because no job in this repository declares an environment yet. So the claim that GitHub writes `:environment:dev` in place of the ref — the claim the whole per-environment trust policy rests on — remains untested, and this operation is not closed by the console alone.
 
 **The failure signature.** `Not authorized to perform sts:AssumeRoleWithWebIdentity`, identical to a wrong subject and to a missing environment, because STS never names the claim that failed. If a job declaring an environment cannot assume its role, check this page before rereading the trust policy — and if it still fails, print the token's `sub` and `aud` claims, never the token, exactly as step 7 did.
 
