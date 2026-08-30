@@ -32,7 +32,7 @@ container at `v2-fargate` inherits all four.
 | `instance_profile_name` | string | — | `linkforge-ssm-host`, from `account/workload_roles.tf` |
 | `endpoint_security_group_id` | string | `null` | How the host reaches the AWS APIs. Set means endpoints; null means a NAT gateway |
 | `instance_type` | string | `t3.micro` | Matched to the AMI's architecture, which is x86_64 |
-| `health_port` | number | `8080` | What the responder binds and step 5 health checks |
+| `health_port` | number | `8080` | What the responder binds and [`modules/alb`](../alb/) health checks |
 | `tags` | map | `{}` | Extra tags. The provider's `default_tags` already carry the project-wide four |
 
 `subnet_id` is singular and it is the caller that indexes the list. That is
@@ -66,9 +66,10 @@ Two consequences worth stating rather than discovering:
   `aws_instance` on purpose. Losing SSM access means rebuilding the host, and
   there is no SSH fallback to reach for. That is the intended failure mode of a
   machine that is destroyed nightly.
-- **Step 5 adds the first inbound rule this group has ever had**, from the load
-  balancer, on `health_port`. That is why the rules here are separate
-  resources — see below.
+- **[`modules/alb`](../alb/) adds the first inbound rule this group has ever
+  had**, from the load balancer, on `health_port` — and it adds it from over
+  there rather than from here. That is why the rules in this module are
+  separate resources; see below.
 
 ## Egress is where the environments differ
 
@@ -136,11 +137,15 @@ if the blanket one is ever narrowed.
 `ingress` block, which is correct there because nothing outside that module
 ever adds to it.
 
-This group is different. At step 5 the load balancer's group allows egress to
-*this* group while this group allows ingress from *that* one, and two inline
-blocks referencing each other is a dependency cycle Terraform refuses to
-resolve. `aws_vpc_security_group_egress_rule` — one rule per resource — is what
-makes step 5 an addition rather than a rewrite.
+This group is different. [`modules/alb`](../alb/) allows egress from the load
+balancer's group to *this* group while this group allows ingress from *that*
+one, and two inline blocks referencing each other is a dependency cycle
+Terraform refuses to resolve. `aws_vpc_security_group_egress_rule` — one rule
+per resource — is what made step 5 an addition rather than a rewrite, and an
+inline block here would have been worse than a cycle: Terraform treats an
+inline rule set as authoritative and deletes anything it did not write, so the
+load balancer's rule would have been created and then removed on the next
+apply.
 
 Inline blocks and rule resources on the same security group fight: Terraform
 treats the inline set as authoritative and deletes anything it did not write.
@@ -274,11 +279,11 @@ argument for `interface_endpoint_az_count` being a separate number from
 
 | Output | Consumed by |
 | --- | --- |
-| `instance_id` | `aws ssm start-session --target`, and the target group in step 5 |
+| `instance_id` | `aws ssm start-session --target`, and [`modules/alb`](../alb/)'s target group |
 | `private_ip` | The host's only address. There is no public one |
 | `availability_zone` | Compare against the endpoint zones. Different is fine and costs a cross-zone hop |
-| `security_group_id` | Step 5, which adds this group's first ingress rule |
-| `health_port` | Step 5's target group and health check |
+| `security_group_id` | [`modules/alb`](../alb/), which adds this group's first ingress rule |
+| `health_port` | The target group's port and health check |
 
 ## Not in this module
 

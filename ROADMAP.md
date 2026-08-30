@@ -102,7 +102,7 @@ The table above changes at the end of a milestone only. Thus it holds no detail 
 | 2 | `modules/network`. The VPC, the subnets, and the difference between the environments expressed as arguments | Done |
 | 3 | The interface endpoints that let `dev` reach the AWS APIs without a NAT gateway | Done |
 | 4 | The host in a private subnet, reached over SSM. No key pair, no bastion, no inbound rule | Done |
-| 5 | The load balancer, and a target group that health checks `/health` | Not started |
+| 5 | The load balancer, and a target group that health checks `/health` | Done |
 | 6 | `live/dev/network`, applied. `live/stage/network` and `live/prod/network`, written and validated only | Not started |
 | 7 | The first workflow that applies. It declares `environment: dev`, and it is what tests step 1 | Not started |
 | 8 | The Terragrunt decision, once the same backend block stands in three directories | Not started |
@@ -128,11 +128,53 @@ The machine itself is [modules/ssm-host](modules/ssm-host/). Written and merged,
 
 Its egress is where the three environments differ, and the difference arrives as an argument rather than as a second copy of the module. With interface endpoints the far end of the connection is an ENI inside this VPC, so the rule can name its security group. With a NAT gateway the far end is the public internet, and a rule can name nothing but a CIDR. So the environment that pays for the NAT gateway ends up with the looser egress rule and the cheap one ends up with the tighter, which is the reverse of how the cost table reads. See [modules/ssm-host/README.md](modules/ssm-host/README.md) for that and for the S3 prefix list rule, which is the one omission in this module that fails silently rather than loudly.
 
+Step 5 is [modules/alb](modules/alb/), and it is the first module in this
+project whose resources outlive the milestone that wrote them. The load
+balancer, its security group and its listener are the same resources at
+`v2-fargate` and at `v7-edge`; only the target changes, from an instance to an
+ECS service. That is the reason it is a third directory rather than more
+resources inside `network/`, and it is the mirror of the reason `ssm-host/` is
+its own directory — one module is built to be deleted and one is built to be
+kept, and neither should be tangled in the other.
+
+Written and merged, which is not applied. Nothing calls it until step 6, so the
+only thing checking it is `terraform validate`, exactly as with steps 2 and 4.
+
+Two things in it were decided by constraints rather than by preference. The
+first is that this module writes an ingress rule into a security group it did
+not create — the host's. The rule pair is circular by nature, the load balancer
+allowing egress to the host while the host allows ingress from the load
+balancer, and two modules that each read the other's output is a cycle Terraform
+reports at the module level even though no single resource is in a loop. One
+side owns both rules. That is also what step 4's separate rule resources were
+for: an inline block is authoritative and would have deleted anything added from
+outside it.
+
+The second is that the target group is named by AWS rather than by us.
+`target_type` is force-new and `v2-fargate` changes it from `instance` to `ip`,
+and a target group cannot be destroyed while a listener still forwards to it. So
+the new one has to exist before the old one goes, which needs
+`create_before_destroy`, which needs a generated name, whose prefix AWS caps at
+six characters. The load balancer keeps a readable name for the opposite reason:
+it is not going to be replaced, and its name is inside the DNS name people type.
+
+The one exposure decision in the milestone is an argument with no default.
+`allowed_cidrs` is what the internet may open a connection to, and the module
+refuses to guess on a stack's behalf — the same shape as `nat_gateway_count` and
+`interface_endpoint_az_count` rejecting their own default pair.
+
+What none of this proves is that a target ever passes a check. That is step 6,
+and the test is `aws elbv2 describe-target-health`, not a clean apply: every
+resource here can be created successfully with the health check failing every
+time. `Target.Timeout` and `Target.FailedHealthChecks` are the two answers worth
+knowing apart, because they separate a security group fault from a responder
+fault without logging into anything.
+
 Step 6 is where the addressing fixed in `v0-bootstrap` is spent. `dev` is `10.0.0.0/16`, `stage` is `10.1.0.0/16`, `prod` is `10.2.0.0/16`, and only the first is applied. See [live/README.md](live/README.md) for the layout and for what makes an unapplied environment unreachable rather than merely unbuilt.
 
 Steps 6 and 7 also meet a gap that nothing before them could have found. `linkforge-gha-apply-dev` holds state access and the escalation deny and nothing else, so it cannot create a VPC, a subnet, an endpoint, a security group or an instance — the first apply from CI fails on `ec2:CreateVpc`, before a single resource exists. That is the *grows per milestone* line in [RUNBOOK.md](RUNBOOK.md) coming due for the first time, and it is a hand-applied change to `account/` for the same reason everything there is: a role that can write its own permissions makes the scoping decorative.
 
-Worth deciding before writing it rather than during. The permissions this milestone needs are the EC2 network surface plus `iam:PassRole` scoped to `linkforge-ssm-host` alone — a host cannot be given a profile the applying role may not pass, and an unscoped `PassRole` hands the pipeline every role in the account. It is also the first permission set that has to allow deletes, because step 9 destroys `dev` nightly with the same role.
+Worth deciding before writing it rather than during. The permissions this milestone needs are the EC2 network surface, the `elasticloadbalancing` actions that step 5 added to it, plus `iam:PassRole` scoped to `linkforge-ssm-host` alone — a host cannot be given a profile the applying role may not pass, and an unscoped `PassRole` hands the pipeline every role in the account. It is also the first permission set that has to allow deletes, because step 9 destroys `dev` nightly with the same role.
 
 Step 8 is a decision and possibly no change. Terragrunt was deferred in `v0-bootstrap` because the duplication it removes did not exist yet. Step 6 creates it. Revisit it there rather than assuming either answer.
 
