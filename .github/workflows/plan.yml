@@ -391,15 +391,32 @@ jobs:
           # The cd is in a subshell so the loop's own working directory is
           # untouched; Terragrunt has no -chdir, it reads the terragrunt.hcl of
           # wherever it is.
+          # --tf-forward-stdout, and the first run of this job is what proved
+          # it necessary. Terragrunt does not pass Terraform's stdout through:
+          # it captures it, enriches it, and re-logs every line at its own
+          # STDOUT level, so a plan arrives looking like
+          #
+          #   10:09:19.809 STDOUT [live/dev/network] tofu: Plan: 12 to add, ...
+          #
+          # That is a log, not a plan. It broke the status column below, which
+          # anchors on Terraform's own summary line, and it put log furniture
+          # in front of every line of the plan the reviewer reads in the pull
+          # request comment. This flag turns the wrapping off for the wrapped
+          # tool only; Terragrunt's own messages are unaffected.
+          #
+          # A global flag, so it goes before `run`. And a flag rather than
+          # TG_TF_FORWARD_STDOUT in the env block: this one is worth seeing at
+          # the call site, and a misspelled flag fails loudly where a
+          # misspelled environment variable is ignored in silence.
           run_init() {
             case "$2" in
-              terragrunt) ( cd "$1" && terragrunt run -- init -input=false -lock-timeout=5m ) ;;
+              terragrunt) ( cd "$1" && terragrunt --tf-forward-stdout run -- init -input=false -lock-timeout=5m ) ;;
               *)          terraform -chdir="$1" init -input=false -lock-timeout=5m ;;
             esac
           }
           run_plan() {
             case "$2" in
-              terragrunt) ( cd "$1" && terragrunt run -- plan -input=false -no-color -lock-timeout=5m ) ;;
+              terragrunt) ( cd "$1" && terragrunt --tf-forward-stdout run -- plan -input=false -no-color -lock-timeout=5m ) ;;
               *)          terraform -chdir="$1" plan -input=false -no-color -lock-timeout=5m ;;
             esac
           }
@@ -422,25 +439,39 @@ jobs:
             cat "$out"
             echo "::endgroup::"
 
+            # Unanchored, deliberately, even though the flag above should now
+            # put these lines at the start of their own. The anchor was the
+            # single point of failure that made a perfectly good plan report
+            # "unrecognised output", and anchoring again would rebuild it —
+            # any future Terragrunt that decorates a line differently breaks
+            # the status column and nothing else notices. The theoretical cost
+            # is a resource attribute containing the literal text "Plan: N to
+            # add"; the actual cost of the anchor has already been paid once.
             if [ "$rc" -ne 0 ]; then
-              status="**failed**"
+              plan_status="**failed**"
               failed=1
-            elif grep -q '^Plan: ' "$out"; then
-              status="$(grep '^Plan: ' "$out" | tail -1 | sed 's/^Plan: //; s/\.$//')"
-            elif grep -q '^Changes to Outputs:' "$out"; then
+            elif grep -q 'Plan: [0-9]* to add' "$out"; then
+              plan_status="$(grep 'Plan: [0-9]* to add' "$out" | tail -1 | sed 's/.*Plan: //; s/\.[[:space:]]*$//')"
+            elif grep -q 'Changes to Outputs:' "$out"; then
               # Terraform prints "No changes." and then this when only an
               # output moved. Reporting that as "no changes" would be wrong in
               # the one direction that matters: an output is what the next
-              # stack reads through terraform_remote_state.
-              status="outputs only"
-            elif grep -q '^No changes\.' "$out"; then
-              status="no changes"
+              # stack reads through terraform_remote_state. Checked before
+              # "No changes." for that reason — both lines are present.
+              plan_status="outputs only"
+            elif grep -q 'No changes\.' "$out"; then
+              plan_status="no changes"
             else
-              status="**unrecognised output**"
+              # Self-diagnosing, because the first version of this branch said
+              # "unrecognised output" and nothing else, and the whole cost of
+              # that failure was not knowing what the output actually was.
+              plan_status="**unrecognised output**"
               failed=1
+              echo "::warning::$root: exit 0 but no recognisable plan summary. Last 20 lines:"
+              tail -20 "$out"
             fi
 
-            printf '%s\t%s\t%s\n' "$root" "$slug" "$status" >> "$work/status.tsv"
+            printf '%s\t%s\t%s\n' "$root" "$slug" "$plan_status" >> "$work/status.tsv"
           done < "$work/roots.txt"
 
           echo "PLAN_FAILED=$failed" >> "$GITHUB_ENV"
@@ -460,8 +491,8 @@ jobs:
             if [ ! -s "$work/status.tsv" ]; then
               echo "No plan ran."
             else
-              while IFS="$(printf '\t')" read -r root slug status; do
-                echo "### \`$root\` — $status"
+              while IFS="$(printf '\t')" read -r root slug plan_status; do
+                echo "### \`$root\` — $plan_status"
                 echo
                 echo '```terraform'
                 cat "$work/plans/$slug.txt"
@@ -516,8 +547,8 @@ jobs:
               echo "| Root | Result |"
               echo "| --- | --- |"
               if [ -s "$work/status.tsv" ]; then
-                while IFS="$(printf '\t')" read -r root slug status; do
-                  echo "| \`$root\` | $status |"
+                while IFS="$(printf '\t')" read -r root slug plan_status; do
+                  echo "| \`$root\` | $plan_status |"
                 done < "$work/status.tsv"
               fi
               if [ -s "$work/deferred.txt" ]; then
@@ -537,13 +568,13 @@ jobs:
             planned="$(wc -l < "$work/status.tsv" | tr -d ' ')"
             budget=$(( COMMENT_BUDGET / planned ))
 
-            while IFS="$(printf '\t')" read -r root slug status; do
+            while IFS="$(printf '\t')" read -r root slug plan_status; do
               out="$work/plans/$slug.txt"
               {
                 # Collapsed. A pull request touching four roots would otherwise
                 # open with several hundred lines the reviewer has to scroll
                 # past to reach the table.
-                echo "<details><summary><code>$root</code> — $status</summary>"
+                echo "<details><summary><code>$root</code> — $plan_status</summary>"
                 echo
                 # Four backticks, not three. A rendered user_data or an IAM
                 # policy document in a plan can contain a fence of three, and
