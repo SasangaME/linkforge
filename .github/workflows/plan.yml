@@ -1,11 +1,14 @@
 name: terraform plan
 
 # pull_request only, and that is a constraint rather than a preference.
-# GitHub writes the event into the OIDC token's sub claim. The plan role's
-# trust policy pins repo:SasangaME/linkforge:pull_request with StringEquals,
-# so a push or a workflow_dispatch run carries a different sub and cannot
-# assume the role at all. The trigger and the trust policy are one decision
-# written in two places.
+# GitHub writes the event into the OIDC token's sub claim, and the plan role's
+# trust policy lists the subjects it accepts with StringEquals — so the trigger
+# and the trust policy are one decision written in two places, and a run whose
+# event is not on that list cannot assume the role at all.
+#
+# The list is no longer one entry. v1-network's apply.yml plans on a push to
+# main with this same role, so :ref:refs/heads/main was added beside
+# :pull_request. A workflow_dispatch run still carries neither.
 #
 # The base branch is not in that decision. A pull request carries the same sub
 # whichever branch it targets, so widening this list needs no IAM change — and

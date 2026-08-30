@@ -1,0 +1,204 @@
+name: terraform apply
+
+# ONE STACK, AND DELIBERATELY SO. This workflow applies live/dev/network and
+# nothing else. Generalising it belongs to v3-pipeline, not here — a matrix of
+# one is harder to read than a hardcoded string and proves nothing, and every
+# way of writing it would be a guess at a stack layout that does not exist yet.
+#
+# It is worth being precise about what "one stack" costs, because it is not one
+# string. Eight things below assume it: the `paths` filter, the concurrency
+# group, `env.STACK`, the summary heading, the artifact name on the upload, the
+# same name on the download, `environment: dev`, and the apply role session
+# name.
+#
+# When the second stack arrives, three of those change shape rather than value.
+#
+#   The artifact name has to be derived. Artifact names must be unique within a
+#   run, so two stacks both uploading `tfplan` collide — and if they did not,
+#   the apply job would download some other stack's plan and apply it without
+#   complaint. That is a wrong apply, not an error. The name also cannot be the
+#   path: `/` is not allowed in one, which is why this reads tfplan-dev-network
+#   rather than tfplan-live/dev/network.
+#
+#   Concurrency moves from the workflow to the job, keyed on the stack. What is
+#   being serialised is the state lock, and each stack has its own state file —
+#   so two different stacks should apply at once, and two runs of the same stack
+#   must not. A workflow-level group gets that exactly backwards.
+#
+#   Ordering is the part a matrix does not solve. The day live/dev/app reads
+#   live/dev/network through terraform_remote_state, parallel legs plan the app
+#   against network state that is stale or absent, and `strategy: matrix` has no
+#   `needs` between legs. The answers are explicit layers, a reusable workflow
+#   called once per layer, or Terragrunt's dependency blocks — which is the same
+#   pressure the Terragrunt decision defers, arriving from this direction rather
+#   than from duplicated backend blocks.
+#
+# One thing that does NOT change: the reviewer gate. GitHub's Review deployments
+# dialog is per run and environment, not per job, so a matrix of eight stacks
+# all declaring `environment: dev` is one approval. Confirm that on the first
+# two-stack run rather than assuming it.
+
+# push to main, and the trigger is half of an IAM decision again — but not the
+# half the plan role expects. A push carries sub `...:ref:refs/heads/main`,
+# which is why account/oidc.tf now lists that subject alongside pull_request.
+# The apply job's subject is different again and comes from the `environment:`
+# key below, not from this trigger.
+#
+# The path filter is what keeps this workflow off every unrelated commit. It
+# does not gate correctness — the plan below is authoritative — it gates noise.
+# live/dev/network does not exist yet, so nothing here fires until it does.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'live/dev/network/**'
+      - 'modules/**'
+
+# Same reasoning as plan.yml: queue, do not cancel. There is a second reason
+# here. A run waiting on the reviewer holds this group, so pushing twice queues
+# the second behind a human — which is correct, because the state lock would
+# serialise them anyway and the second plan would be stale the moment the first
+# applied.
+concurrency:
+  group: terraform-apply-dev-network
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  TF_VERSION: 1.14.6
+  TF_IN_AUTOMATION: "true"
+  STACK: live/dev/network
+
+jobs:
+  # The plan runs OUTSIDE the gate, on the read-only role, and that ordering is
+  # forced rather than chosen. Any job that assumes the apply role must declare
+  # `environment: dev`, and declaring it puts the job behind the reviewer — so a
+  # plan produced by the apply role could only ever be read after approval, by
+  # which time the decision has been made. The reviewer needs it before.
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: install terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: assume the plan role
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: linkforge-plan-${{ github.run_id }}
+
+      - name: whoami
+        run: aws sts get-caller-identity
+
+      - name: init
+        run: terraform -chdir=${{ env.STACK }} init -input=false -lock-timeout=5m
+
+      # -out this time, unlike plan.yml. The saved file is the whole point of
+      # the split: the apply job applies THIS plan, so what the reviewer read is
+      # provably what runs. -detailed-exitcode is still absent — a push to main
+      # proposing changes is the normal case.
+      #
+      # The lock is taken and released inside this job. Nothing holds it while
+      # the run waits for a human, which is the second reason plan and apply are
+      # two jobs rather than one gated job.
+      - name: plan
+        run: terraform -chdir=${{ env.STACK }} plan -out=tfplan -input=false -no-color -lock-timeout=5m
+
+      # The reviewer reads this, in the run's summary, and clicks from there.
+      # `show` on the saved file rather than piping the plan step's stdout,
+      # because the artifact and the summary must describe the same bytes.
+      # The summary is capped at 1 MiB; a plan that exceeds it is truncated in
+      # the UI and still complete in the artifact.
+      - name: render the plan into the run summary
+        run: |
+          {
+            echo '## `${{ env.STACK }}`'
+            echo '```terraform'
+            terraform -chdir=${{ env.STACK }} show -no-color tfplan
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # A saved plan is state-adjacent — binary, derived, every attribute value
+      # in plaintext — so this is the one artifact in the repository that anyone
+      # with read access can download. One day of retention is the smallest
+      # window that still outlives a reviewer who approves in the morning.
+      - name: upload the plan
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tfplan-dev-network
+          path: ${{ env.STACK }}/tfplan
+          retention-days: 1
+          if-no-files-found: error
+
+  # `environment: dev` is the button. GitHub holds this job before its first
+  # step, shows "Review deployments" on the run, and starts it only once a
+  # required reviewer approves. The same key is what puts :environment:dev in
+  # the OIDC subject, so the gate and the assume are one mechanism — a job that
+  # skipped the gate could not assume the role even if it tried.
+  #
+  # No `deployments: write` here. The deployment record is created by the
+  # Actions service, not by this job's token.
+  apply:
+    name: apply
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: dev
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: install terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: download the plan
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: tfplan-dev-network
+          path: ${{ env.STACK }}
+
+      # An environment-scoped variable, not a repository one. It resolves to
+      # whichever environment this job declared, so stage and prod reuse this
+      # body unchanged — an environment variable shadows a repository variable
+      # of the same name, so there is nothing ambiguous about the lookup.
+      - name: assume the apply role
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
+        with:
+          role-to-assume: ${{ vars.AWS_APPLY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: linkforge-apply-dev-${{ github.run_id }}
+
+      # Must read assumed-role/linkforge-gha-apply-dev. Anything else — the plan
+      # role in particular — means the gate was bypassed somewhere upstream.
+      - name: whoami
+        run: aws sts get-caller-identity
+
+      - name: init
+        run: terraform -chdir=${{ env.STACK }} init -input=false -lock-timeout=5m
+
+      # No -auto-approve, because a saved plan takes no approval: the answer was
+      # given in the UI. A saved plan is bound to the state serial it was made
+      # against, so if anything applied in between this fails as stale rather
+      # than applying a diff nobody read. That failure is the feature.
+      - name: apply
+        run: terraform -chdir=${{ env.STACK }} apply -input=false -no-color -lock-timeout=5m tfplan

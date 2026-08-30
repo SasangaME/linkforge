@@ -67,7 +67,7 @@ The application does not change for scale. It must only be stateless. Milestone 
 | `v0-bootstrap` | Basic account setup | State backend, OIDC, billing limit |
 | `v1-network` | A network and a host that you can access | VPC, subnets, SSM, ALB |
 | `v2-fargate` | A service in a container | ECR, ECS Fargate, logs, ECS service auto scaling. The application is written here |
-| `v3-pipeline` | Automatic release to production | GitHub Actions with OIDC, blue-green release, IaC scan |
+| `v3-pipeline` | Automatic release to production | GitHub Actions with OIDC, blue-green release, IaC scan, multi-stack apply |
 | `v4-state` | Permanent data storage | DynamoDB, S3, KMS, Secrets Manager |
 | `v5-observable` | Monitoring and alerts | Alarms, dashboards, Logs Insights, X-Ray, SNS |
 | `v6-events` | An asynchronous pipeline for click data | SQS, Lambda, Firehose, S3, Athena, EventBridge |

@@ -25,9 +25,23 @@ resource "aws_iam_openid_connect_provider" "github" {
   client_id_list = ["sts.amazonaws.com"]
 }
 
+# Two subjects, not one, and the second was forced by v1-network. `apply.yml`
+# plans on a push to main before the reviewer gate, on this role, because a job
+# that assumed the apply role would have to declare `environment: dev` and would
+# therefore run only after approval — a plan the reviewer cannot read in time.
+# So the pre-gate plan runs here, and a push emits :ref:refs/heads/main.
+#
+# StringEquals over a list is an OR across exact matches, so this widens the
+# role to any push-triggered workflow on main and to nothing else. That is
+# affordable for exactly the reason the role's scope was fixed at ReadOnlyAccess
+# in step 4: a role that cannot mutate has no blast radius to widen.
+#
+# release/* joins this list when stage and prod are promoted, and it will not
+# fit — StringEquals does not wildcard, so that day the condition becomes
+# StringLike over :ref:refs/heads/release/*.
 data "aws_iam_policy_document" "gha_plan_trust" {
   statement {
-    sid     = "GitHubActionsPullRequest"
+    sid     = "GitHubActionsPlan"
     effect  = "Allow"
     actions = ["sts:AssumeRoleWithWebIdentity"]
 
@@ -45,7 +59,10 @@ data "aws_iam_policy_document" "gha_plan_trust" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["${local.github_subject}:pull_request"]
+      values = [
+        "${local.github_subject}:pull_request",
+        "${local.github_subject}:ref:refs/heads/main",
+      ]
     }
   }
 }

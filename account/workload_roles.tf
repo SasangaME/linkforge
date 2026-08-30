@@ -58,3 +58,38 @@ resource "aws_iam_instance_profile" "ssm_host" {
 
   tags = { Milestone = "v1-network" }
 }
+
+# --- service-linked roles -----------------------------------------------
+
+# Not a role this account writes a policy for. A service-linked role is owned by
+# the service, carries an AWS-managed policy that cannot be edited, and has a
+# fixed name — one per account, not one per environment. Elastic Load Balancing
+# uses this one to put ENIs into the subnets an ALB is given, which is how
+# traffic reaches targets over private addresses.
+#
+# It is here for the same reason as everything above it, and the reason is
+# sharper than usual. AWS creates this role for you on the first
+# CreateLoadBalancer in an account — and bills the caller `iam:CreateServiceLinkedRole`
+# for it. The no_escalation guardrail denies `iam:Create*` on `*`, and an
+# explicit Deny is terminal: it is not weighed against Allows and is not beaten
+# by a more specific one. So there is no policy that could be added to an apply
+# role to make its first ALB succeed. The alternative was narrowing the deny to
+# let `iam:CreateServiceLinkedRole` through under an `iam:AWSServiceName`
+# condition, which trades a permanent guardrail for a one-time bootstrap.
+#
+# ORDERING. This must be applied before any load balancer is created by hand.
+# devops-admin has the permission the pipeline lacks, so a hand-applied ALB
+# creates the role as a side effect, and this resource then fails with
+# `InvalidInput: Service role name AWSServiceRoleForElasticLoadBalancing has
+# been taken in this account`. Recoverable with `terraform import`, and not
+# worth the recovery when applying account/ first costs nothing.
+#
+# Destroying it is asynchronous and fails while any load balancer still exists.
+# account/ is never destroyed, so that is a note rather than a problem — but it
+# is the reason this belongs here and not in a stack that step 9 tears down
+# nightly.
+resource "aws_iam_service_linked_role" "elasticloadbalancing" {
+  aws_service_name = "elasticloadbalancing.amazonaws.com"
+
+  tags = { Milestone = "v1-network" }
+}
