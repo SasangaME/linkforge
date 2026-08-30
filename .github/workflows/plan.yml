@@ -404,19 +404,29 @@ jobs:
           # request comment. This flag turns the wrapping off for the wrapped
           # tool only; Terragrunt's own messages are unaffected.
           #
-          # A global flag, so it goes before `run`. And a flag rather than
-          # TG_TF_FORWARD_STDOUT in the env block: this one is worth seeing at
-          # the call site, and a misspelled flag fails loudly where a
-          # misspelled environment variable is ignored in silence.
+          # It belongs to `run`, not to the global set, so it sits between the
+          # command and the `--` that ends Terragrunt's arguments. Placed
+          # before `run` it is rejected outright:
+          #
+          #   ERROR flag `--tf-forward-stdout` is not a valid global flag.
+          #         Did you mean to use `run --tf-forward-stdout`?
+          #
+          # Verified against v1.1.4 itself rather than against the
+          # documentation, which describes it in the global context.
+          #
+          # A flag rather than TG_TF_FORWARD_STDOUT in the env block: this one
+          # is worth seeing at the call site, and — as the error above shows —
+          # a wrong flag fails loudly where a wrong environment variable is
+          # ignored in silence.
           run_init() {
             case "$2" in
-              terragrunt) ( cd "$1" && terragrunt --tf-forward-stdout run -- init -input=false -lock-timeout=5m ) ;;
+              terragrunt) ( cd "$1" && terragrunt run --tf-forward-stdout -- init -input=false -lock-timeout=5m ) ;;
               *)          terraform -chdir="$1" init -input=false -lock-timeout=5m ;;
             esac
           }
           run_plan() {
             case "$2" in
-              terragrunt) ( cd "$1" && terragrunt --tf-forward-stdout run -- plan -input=false -no-color -lock-timeout=5m ) ;;
+              terragrunt) ( cd "$1" && terragrunt run --tf-forward-stdout -- plan -input=false -no-color -lock-timeout=5m ) ;;
               *)          terraform -chdir="$1" plan -input=false -no-color -lock-timeout=5m ;;
             esac
           }
