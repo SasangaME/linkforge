@@ -167,7 +167,13 @@ jobs:
       # because the artifact and the summary must describe the same bytes.
       # The summary is capped at 1 MiB; a plan that exceeds it is truncated in
       # the UI and still complete in the artifact.
+      #
+      # working-directory, like every other terragrunt step. Without it this
+      # runs at the repository root, where there is no terragrunt.hcl, and the
+      # error names the root path rather than the missing setting. $GITHUB_STEP_SUMMARY
+      # is an absolute path, so redirecting to it from here is unaffected.
       - name: render the plan into the run summary
+        working-directory: ${{ env.UNIT }}
         run: |
           {
             echo '## `${{ env.UNIT }}`'
