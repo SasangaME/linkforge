@@ -12,6 +12,18 @@ PORT = ${health_port}
 
 
 class Handler(BaseHTTPRequestHandler):
+    # BaseHTTPRequestHandler speaks HTTP/1.0 unless told otherwise, so an ALB's
+    # HTTP/1.1 health check gets a 1.0 answer and opens a fresh TCP connection
+    # every thirty seconds. Safe only because every response below sets
+    # Content-Length — under 1.1 a response without one hangs the client
+    # rather than erroring, so that header is now load-bearing.
+    protocol_version = "HTTP/1.1"
+
+    # The other half of the same change. Under 1.0 every connection closed
+    # after one response; under 1.1 keep-alive holds a thread until the client
+    # goes away, and a half-open connection holds it indefinitely.
+    timeout = 5
+
     def do_GET(self):
         ok = self.path == "/health"
         body = b"ok\n" if ok else b"not found\n"

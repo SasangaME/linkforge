@@ -198,6 +198,19 @@ about to launch and reading `(sensitive value)`.
 A Python `http.server` on `health_port`, under a systemd unit, started by
 `user_data`. `200 ok` on `/health` and `404` on everything else.
 
+The handler sets `protocol_version = "HTTP/1.1"`, and that is not a default.
+`BaseHTTPRequestHandler` speaks HTTP/1.0 unless told otherwise, so without the
+line an ALB's HTTP/1.1 health check receives a 1.0 answer and opens a fresh TCP
+connection every thirty seconds forever. Whether a target group rejects that was
+never established — the line exists to make the question not arise.
+
+It is safe only because every response sets `Content-Length`. Under 1.1 a
+response without one does not error, it hangs the client until a timeout, so
+that header is load-bearing and any branch added later has to set it. The
+`timeout = 5` beside it is the other half of the same change: under 1.0 every
+connection closed after a single response, and under 1.1 with keep-alive a
+connection holds its thread until the client goes away.
+
 Nothing in the script installs a package. That is not thrift — `dev` has no
 default route, so a `dnf install` does not fail, it hangs until cloud-init
 times out. Python 3 and the SSM agent are both preinstalled on AL2023, and the
@@ -218,6 +231,27 @@ One trap in the template: the heredocs are quoted (`<<'PY'`), which stops
 `templatefile` over the whole file first — which is exactly why `${health_port}`
 resolves. Unquoting either heredoc would let a `$` in the Python leak into the
 shell.
+
+## One argument whose behaviour is unverified
+
+`encrypted = true` on the root volume is redundant in `us-east-1`, where
+[`account/baseline.tf`](../../account/baseline.tf) turned on EBS encryption by
+default. It is written anyway, because a module should state what it requires
+rather than inherit it from an account setting it cannot see.
+
+What it is **not** is a safeguard for `v10-resilient`'s second region, which is
+what this argument was originally justified as. `RunInstances` with
+`Encrypted=true` on a root device mapping from an unencrypted snapshot — which
+the AL2023 AMI is — may be accepted only *because* encryption by default is
+enabled in the region. If that is so, this line does nothing here and is
+precisely what fails the launch in a region without the setting.
+
+Untested in either direction, and deliberately left that way rather than
+resolved with something that looks like a test. `run-instances --dry-run`
+checks permissions and returns `DryRunOperation` without fully validating the
+request, so a pass would prove nothing about the behaviour in question. The
+real test is one hand-launched instance in a region with the setting off, and
+it belongs at the start of `v10-resilient` rather than here.
 
 ## Zones, and what the single-zone endpoint costs
 

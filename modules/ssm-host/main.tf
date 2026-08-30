@@ -112,9 +112,17 @@ resource "aws_instance" "this" {
     http_put_response_hop_limit = 1
   }
 
-  # encrypted = true is already true — account/baseline.tf turned on EBS
-  # encryption by default for this region. Stated anyway, because that setting
-  # is regional and v10-resilient's second region starts without it.
+  # encrypted = true is redundant in us-east-1, where account/baseline.tf turned
+  # on EBS encryption by default. It is written anyway because a module should
+  # state what it requires rather than inherit it from an account setting it
+  # cannot see.
+  #
+  # It is NOT a safeguard for v10-resilient's second region, which is what this
+  # comment used to claim. RunInstances with Encrypted=true on a root mapping
+  # from an unencrypted snapshot — which the AL2023 AMI is — may be accepted
+  # only because encryption by default is on, in which case this line is what
+  # fails the launch in a region without it. Untested. Settle it with one
+  # hand-launched instance there before writing any of v10, not with --dry-run.
   root_block_device {
     volume_type           = "gp3"
     volume_size           = 8
