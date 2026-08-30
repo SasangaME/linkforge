@@ -14,6 +14,7 @@ An operation in this file has three parts: the reason for it, the correct time t
 | Set the plan role repository variable | `v0-bootstrap` | Done, 2026-08-29 |
 | Create the GitHub Environments | `v1-network` | `dev` done, 2026-08-29. `stage` and `prod` on promotion |
 | Apply the `account` module by hand | `v0-bootstrap` onward | Done, 2026-08-29 |
+| Apply `stage` or `prod` from the Actions UI | `v1-network` | Not started. Blocked on the apply workflow, step 7 |
 
 ## The correct sequence
 
@@ -357,6 +358,82 @@ from `max_password_age`, and it is not drift.
 The roles defined in this module have no check here. A trust policy read back from IAM
 proves only that it says what it was written to say; the only thing that tests one is
 assuming the role. That is operation 5 and `v1-network`.
+
+## Operation 7: Apply `stage` or `prod` from the Actions UI
+
+**Reason.** A merge to `main` is a natural trigger for `dev`, because the merge *is* the
+event. Promotion has no such event. `release/1.02` is cut once and then applied twice —
+to `stage`, and later, after a human looks at it, to `prod` — so the thing that starts a
+prod apply is a decision rather than a commit. A `push` trigger on `release/**` would
+fire both at the moment the branch appears, which is the opposite of what the reviewer
+on `prod` is for. `workflow_dispatch` is therefore the promotion mechanism, not a manual
+fallback for when the pipeline is broken.
+
+The question that makes this an operation is whether a dispatched run can assume the
+apply role at all, and the answer is not symmetric with the plan role.
+
+[account/oidc.tf](account/oidc.tf) pins two different claims. The plan role's trust
+policy requires a subject ending in `:pull_request`, so a `workflow_dispatch` run —
+whose subject ends in `:ref:refs/heads/...` — cannot assume it, and [.github/workflows/plan.yml](.github/workflows/plan.yml)
+is `pull_request`-only for exactly that reason. The apply roles pin
+`:environment:${each.key}` and nothing else. No event, no ref. A job that declares
+`environment: prod` produces that same subject whether a push, a schedule or a person
+started it, and STS cannot tell the difference and does not try.
+
+So AWS permits the dispatch, and the branch requirement is enforced where it always was:
+GitHub evaluates the environment's deployment branch policy against the selected ref
+**before** minting a token. Choosing `main` for a `prod` dispatch fails with no token
+issued and nothing for the role to refuse. This is the same fact as operation 5, seen
+from the other side — the environment is the gate, and the trigger is not part of it.
+
+**When.** From `v1-network` step 7 onward for `dev`, and from the day `stage` and `prod`
+are promoted for those two. It depends on operation 5 having created the environment: a
+dispatch that names an environment GitHub holds no record of fails before it starts.
+
+**Steps.**
+
+1. Add `workflow_dispatch:` to the apply workflow and merge it to `main`. The **Run
+   workflow** button appears only if the workflow file exists on the default branch —
+   but the version that *runs* is the one on the branch selected in step 2, not the one
+   on `main`.
+2. Open the workflow, select **Run workflow**, and choose `release/1.02` in the branch
+   dropdown. Not `main`; `main` is a deployment branch for `dev` only.
+3. For `prod`, the job then parks on **Waiting for approval**. Approve it as the
+   required reviewer, exactly as a push-triggered promotion would.
+
+**On the input surface.** A dispatch form with an `environment` choice input, consumed as
+`environment: ${{ inputs.environment }}`, is the obvious shape and the one to avoid. It
+is not unsafe — the deployment branch policy is evaluated per environment however the
+name arrived, so a `prod` value selected on `main` is still rejected. What it costs is
+the audit trail. "Who applied prod, and to what" becomes a form field in a run log
+rather than a branch and a deployment record. A separate job per environment, each with
+a literal `environment:` and an `if:` on the input, reads worse and audits better. Take
+the second.
+
+**The caveat worth stating.** A dispatch decouples the apply from the commit that
+motivated it. It runs whatever is at the tip of `release/1.02` at the moment it is
+started, which is not necessarily the commit the reviewer had in front of them when they
+approved — approval is granted against a deployment, and a second dispatch is a second
+deployment needing its own approval, but the branch may have moved between the two. The
+reviewer's job is to read the SHA in the deployment, not the branch name.
+
+**Check.** The `whoami` step prints the role for the environment the job declared:
+
+```
+arn:aws:sts::749000381089:assumed-role/linkforge-gha-apply-prod/<session name>
+```
+
+The negative check is the more informative one, and it fails loudly rather than in the
+shape everything else here fails in. Dispatch the `prod` job from `main` and GitHub
+refuses before any AWS call, naming the reason:
+
+```
+Branch "main" is not allowed to deploy to prod due to environment protection rules.
+```
+
+That is a different failure from operation 5's `Not authorized to perform
+sts:AssumeRoleWithWebIdentity`, and the difference tells you which layer rejected the
+run — GitHub before the token, or IAM after it.
 
 ## A note for `v9-govern`
 
