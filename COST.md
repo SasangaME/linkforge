@@ -77,6 +77,14 @@ State that as a rate, because the rate is the part you control. `dev` after `v1-
 
 Thus the number that decides this bill is not in any `.tf` file, and it is not the budget either. It is whether the environment is destroyed. Milestone `v1-network` step 9 makes that automatic, because a control that depends on memory is not a control.
 
+### The first real measurement, 2026-08-30
+
+`dev` was built by the pipeline at 22:55 and destroyed by hand at 23:20. The environment existed for about **25 minutes**, which at the rate above is about two cents.
+
+That figure is a measured lifetime and not a measured cost, and the difference is the point. Every number in this file is still an estimate taken from a pricing page. The first thing that can check them is Cost Explorer once a day of data has landed, filtered by the `Project` cost allocation tag activated in `v0-bootstrap` — which is why that operation was done before anything with a real cost existed. Until that comparison is made, this file describes what AWS says it charges and not what AWS charged.
+
+The teardown was manual, and a manual teardown that happened once is not evidence that the habit holds. That is the whole argument for step 9.
+
 This ratio is the reason for the daily destroy. It is also the reason that `v0-bootstrap` did not select EKS. The EKS control plane costs about $73 each month. You pay this cost even when no application operates. Thus a destroy operation cannot make EKS cheap.
 
 Use the same test for each new decision. Select the resource whose cost stops when the resource stops.

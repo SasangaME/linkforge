@@ -77,7 +77,7 @@ See [ROADMAP.md](ROADMAP.md) for the milestone list and current status.
 
 ## What exists today
 
-`v0-bootstrap` closed on 2026-08-29 and `v1-network` is in progress. What is *applied* is still only what `v0-bootstrap` applied: the state bucket and the account configuration. The network is written and unbuilt, which is a distinction this repository has learned to make out loud.
+`v0-bootstrap` closed on 2026-08-29 and `v1-network` is in progress, seven of its nine steps done. The network has now been built: on 2026-08-30 the pipeline applied `live/dev/network` end to end, a host with no address and no key pair registered with Session Manager, and the load balancer's target group reported `healthy` with `/health` answering 200 from the public internet. Then it was destroyed, which is the intended steady state — every cost in this milestone is hourly, and step 9 is what stops the teardown depending on someone remembering.
 
 ### `v0-bootstrap`, closed
 
@@ -101,7 +101,7 @@ That subject is not the repository's name. GitHub changed the claim for reposito
 
 It plans `bootstrap/` rather than `account/`. `bootstrap/` takes no variables and holds no secrets, so its plan output is safe to read in a public log; `account/` would need its alert address passed in as a secret and would then print it in plaintext on the pull request. Making that work meant removing the `profile` argument from `bootstrap/`, since a named local profile does not exist on a runner — both modules now resolve credentials from the environment alone, which is the one mechanism that is correct in both places.
 
-[live/](live/) and [modules/](modules/) are the shape of everything after this milestone: a module holds a resource graph with no environment name in it, and one directory per environment per stack supplies the arguments. Three environments are defined — `dev`, `stage`, `prod` — and one is built.
+[live/](live/) and [modules/](modules/) are the shape of everything after this milestone: a module holds a resource graph with no environment name in it, and one directory per environment per stack supplies the arguments. Three environments are defined — `dev`, `stage`, `prod` — and one of them is ever built.
 
 That asymmetry is a cost decision made before the first apply rather than after it. Three copies of `v1-network` is roughly $150 a month standing against a $10 budget, so `dev` reaches AWS through interface endpoints in a single zone instead of a NAT gateway — about $22 a month against $33, and the load balancer keeps it above the budget either way, so it stays on the daily destroy — while `stage` and `prod` exist as configuration that is checked on every pull request and never applied. What keeps them unbuilt is not a comment: their GitHub Environments do not exist, so GitHub will not mint a token naming them, so their IAM roles cannot be assumed by anyone. Writing all three now fixes the addressing and the module interface while both are still free to change; a CIDR cannot be corrected without destroying the VPC that carries it.
 
@@ -123,7 +123,15 @@ A few operations have no Terraform resource and no API worth automating: enablin
 
 ### `v1-network`, in progress
 
-[modules/](modules/) now holds three module definitions, and nothing calls any of them. That is the honest status: they are written, formatted, and checked by `terraform validate` on every pull request, and no resource described below exists in the account. The stacks under `live/` that would build them are step 6.
+[modules/](modules/) holds three module definitions and [live/](live/) holds three stacks that call them. `live/dev/network` has been applied by the pipeline and torn down again; `live/stage/network` and `live/prod/network` are checked by `terraform validate` on every pull request and have never been built.
+
+The apply is what makes the rest of this section worth reading, because two defects survived `fmt`, `validate`, review and a clean plan and were found only by AWS refusing.
+
+The first is that **a `count` cannot be unknown at plan time.** The load balancer registers a target when it is given one, and the switch was written as a comparison against `null`. The instance does not exist when the plan is made, so its ID is unknown, so the comparison is unknown, so the count is unknown — and Terraform will not build a graph whose size it cannot determine. The argument became a list and the switch became its length, because the length of a one-element list is known even when the element is not. That is also the shape the argument wants on the day a second target appears.
+
+The second is that **AWS validates a security group rule description against a fixed character set**, and it excludes the em dash, the apostrophe, the backtick and angle brackets — every character this repository writes prose with. The rejection arrives at apply, after the group and its earlier rules already exist. Comments above a resource may say anything; strings that cross the API may not.
+
+Neither is a mistake that review catches. `validate` reads the references and types inside one directory, and a plan reasons about a graph it can construct. Only the API refuses.
 
 [modules/network/](modules/network/) is the VPC, its subnets, and everything that decides where a packet goes — one module for all three environments, because a staging environment that differs from production in its code rather than in its arguments is not testing production. The three environments differ in exactly one dimension, which is what is allowed to cost money while idle, and that difference arrives as three numbers: how many zones, how many NAT gateways, how many zones get interface endpoints. The last two default to zero together and the module rejects that combination, because an environment with neither has no route from its private subnets to the AWS APIs and it is a mistake that applies cleanly, builds every resource, and leaves every instance unreachable with nothing in the plan to say so.
 
