@@ -7,7 +7,7 @@ name: terraform apply
 #
 # It is worth being precise about what "one stack" costs, because it is not one
 # string. Eight things below assume it: the `paths` filter, the concurrency
-# group, `env.STACK`, the summary heading, the artifact name on the upload, the
+# group, `env.UNIT`, the summary heading, the artifact name on the upload, the
 # same name on the download, `environment: dev`, and the apply role session
 # name.
 #
@@ -52,6 +52,8 @@ on:
     branches: [main]
     paths:
       - 'live/dev/network/**'
+      - 'live/root.hcl'
+      - 'stacks/network/**'
       - 'modules/**'
 
 # Same reasoning as plan.yml: queue, do not cancel. There is a second reason
@@ -67,7 +69,21 @@ env:
   AWS_REGION: us-east-1
   TF_VERSION: 1.14.6
   TF_IN_AUTOMATION: "true"
-  STACK: live/dev/network
+  # Pinned by version and by checksum, like plan.yml. This binary runs with the
+  # apply role's credentials, which is the strongest reason in the repository
+  # not to trust a moving tag.
+  TG_VERSION: 1.1.4
+  TG_SHA256: a2640da8455fa5f3671167e6373832b0907b9dc972dd01c2093cc7808934e158
+  # The Terragrunt unit, not a Terraform root module. Since step 8 this
+  # directory holds one terragrunt.hcl and no .tf at all — the code it runs is
+  # stacks/network, and the backend and provider are generated into a copy of
+  # it inside .terragrunt-cache.
+  UNIT: live/dev/network
+  # Terragrunt picks terraform automatically when it is the only binary on the
+  # PATH, which it is here. Stated anyway: the day a runner image ships tofu as
+  # well, the automatic choice changes underneath this workflow and the failure
+  # would be a provider or state incompatibility rather than a missing binary.
+  TG_TF_PATH: terraform
 
 jobs:
   # The plan runs OUTSIDE the gate, on the read-only role, and that ordering is
@@ -93,6 +109,18 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
+      # Pinned by checksum, not by tag. Step 8 made this binary part of the
+      # apply path, so it runs with the credentials assumed below.
+      - name: install terragrunt
+        run: |
+          set -eu
+          url="https://github.com/gruntwork-io/terragrunt/releases/download/v${TG_VERSION}/terragrunt_linux_amd64"
+          curl -sSLo /tmp/terragrunt "$url"
+          echo "${TG_SHA256}  /tmp/terragrunt" | sha256sum -c -
+          chmod +x /tmp/terragrunt
+          sudo mv /tmp/terragrunt /usr/local/bin/terragrunt
+          terragrunt --version
+
       - name: assume the plan role
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
         with:
@@ -103,8 +131,17 @@ jobs:
       - name: whoami
         run: aws sts get-caller-identity
 
+      # `run --` and not the `terragrunt init` shortcut. Terragrunt parses its
+      # own flags first, so a Terraform flag it does not recognise is an error
+      # about an unknown Terragrunt flag rather than a passthrough. The `--`
+      # ends Terragrunt's argument list and hands the rest to Terraform.
+      #
+      # working-directory names the unit; Terragrunt reads its terragrunt.hcl,
+      # resolves live/root.hcl, generates backend.tf and provider.tf, copies
+      # the repository into .terragrunt-cache and runs Terraform in there.
       - name: init
-        run: terraform -chdir=${{ env.STACK }} init -input=false -lock-timeout=5m
+        working-directory: ${{ env.UNIT }}
+        run: terragrunt run -- init -input=false -lock-timeout=5m
 
       # -out this time, unlike plan.yml. The saved file is the whole point of
       # the split: the apply job applies THIS plan, so what the reviewer read is
@@ -114,8 +151,16 @@ jobs:
       # The lock is taken and released inside this job. Nothing holds it while
       # the run waits for a human, which is the second reason plan and apply are
       # two jobs rather than one gated job.
+      #
+      # The -out path is ABSOLUTE and that is not style. Terraform runs inside
+      # .terragrunt-cache/<hash>/<hash>, so a bare `-out=tfplan` writes the
+      # plan into a scratch directory whose name is a content hash — the upload
+      # step below would find nothing, and `if-no-files-found: error` is what
+      # would report it. An absolute path puts the file where both jobs can
+      # name it.
       - name: plan
-        run: terraform -chdir=${{ env.STACK }} plan -out=tfplan -input=false -no-color -lock-timeout=5m
+        working-directory: ${{ env.UNIT }}
+        run: terragrunt run -- plan -out=${{ github.workspace }}/tfplan -input=false -no-color -lock-timeout=5m
 
       # The reviewer reads this, in the run's summary, and clicks from there.
       # `show` on the saved file rather than piping the plan step's stdout,
@@ -125,9 +170,9 @@ jobs:
       - name: render the plan into the run summary
         run: |
           {
-            echo '## `${{ env.STACK }}`'
+            echo '## `${{ env.UNIT }}`'
             echo '```terraform'
-            terraform -chdir=${{ env.STACK }} show -no-color tfplan
+            terragrunt run -- show -no-color ${{ github.workspace }}/tfplan
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -139,7 +184,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: tfplan-dev-network
-          path: ${{ env.STACK }}/tfplan
+          path: tfplan
           retention-days: 1
           if-no-files-found: error
 
@@ -171,11 +216,24 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
+      # Pinned by checksum, not by tag. Step 8 made this binary part of the
+      # apply path, so it runs with the credentials assumed below.
+      - name: install terragrunt
+        run: |
+          set -eu
+          url="https://github.com/gruntwork-io/terragrunt/releases/download/v${TG_VERSION}/terragrunt_linux_amd64"
+          curl -sSLo /tmp/terragrunt "$url"
+          echo "${TG_SHA256}  /tmp/terragrunt" | sha256sum -c -
+          chmod +x /tmp/terragrunt
+          sudo mv /tmp/terragrunt /usr/local/bin/terragrunt
+          terragrunt --version
+
       - name: download the plan
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: tfplan-dev-network
-          path: ${{ env.STACK }}
+          # The workspace root, matching the absolute -out in the plan job.
+          path: .
 
       # An environment-scoped variable, not a repository one. It resolves to
       # whichever environment this job declared, so stage and prod reuse this
@@ -194,11 +252,13 @@ jobs:
         run: aws sts get-caller-identity
 
       - name: init
-        run: terraform -chdir=${{ env.STACK }} init -input=false -lock-timeout=5m
+        working-directory: ${{ env.UNIT }}
+        run: terragrunt run -- init -input=false -lock-timeout=5m
 
       # No -auto-approve, because a saved plan takes no approval: the answer was
       # given in the UI. A saved plan is bound to the state serial it was made
       # against, so if anything applied in between this fails as stale rather
       # than applying a diff nobody read. That failure is the feature.
       - name: apply
-        run: terraform -chdir=${{ env.STACK }} apply -input=false -no-color -lock-timeout=5m tfplan
+        working-directory: ${{ env.UNIT }}
+        run: terragrunt run -- apply -input=false -no-color -lock-timeout=5m ${{ github.workspace }}/tfplan

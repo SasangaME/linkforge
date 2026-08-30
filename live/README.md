@@ -6,11 +6,22 @@ One directory per environment, one subdirectory per stack:
 live/<environment>/<stack>/
 ```
 
-A stack is a Terraform root module — one directory of `.tf` files with its own
-backend block and its own state file. `live/dev/network` and `live/prod/network`
-are two separate root modules calling the same module out of [`modules/`](../modules/),
-with different arguments. The module holds the resource graph; the directory
-holds the decisions.
+Since step 8, a directory here is a **Terragrunt unit**, not a Terraform root
+module. It holds one `terragrunt.hcl` and no `.tf` at all.
+
+The root module every unit runs is [`stacks/network`](../stacks/network/), which
+composes the three modules in [`modules/`](../modules/). The unit supplies
+arguments; [`root.hcl`](root.hcl) supplies everything derivable from the unit's
+own path — the state key, the `Environment` tag, and the stack source. So
+`live/dev/network` and `live/prod/network` run identical code and differ only in
+`inputs`, which is what "a staging environment that differs from production in
+its code is not testing production" means in practice rather than as an
+intention.
+
+Nothing derived is written into these directories. Terragrunt generates
+`backend.tf` and `provider.tf` into `.terragrunt-cache`, and the repository is
+copied there on every run, which is why the module paths inside `stacks/network`
+resolve at all.
 
 `v1-network` wrote the first three: [`dev/network`](dev/network/), [`stage/network`](stage/network/) and [`prod/network`](prod/network/). Each calls the same three modules and differs only in its arguments.
 
@@ -102,6 +113,14 @@ the path relative to this directory:
 so `live/dev/network` writes `dev/network/terraform.tfstate`, and the S3-native
 lock sits beside it as `dev/network/terraform.tfstate.tflock`.
 
+Since step 8 that sentence is enforced rather than merely true. The key is
+`path_relative_to_include()` in [`root.hcl`](root.hcl), so it is the directory
+path by construction and a unit cannot be pointed at another environment's
+state by editing a literal. That was the strongest single argument for adopting
+Terragrunt: a wrong state key is the one mistake in this repository that is
+both silent and destructive, because a stack that adopts another environment's
+state plans to destroy the difference.
+
 Three buckets would mean three bootstraps, because a state bucket is the one
 thing that cannot store its own state until it exists. The isolation that
 matters is the write, and it comes from the prefix in the role policy rather
@@ -180,23 +199,59 @@ numbers in a stack file and nothing else.
 
 ## Terragrunt
 
-The duplication now exists, which is what step 8 of `v1-network` was waiting
-for. Three `versions.tf` files carry the same backend block with one word
-different, and none of it can be interpolated: a backend block is read before
-variables are evaluated, so `bucket`, `key` and `region` are literals or they
-are nothing.
+Adopted at `v1-network` step 8, on **v1.1.4**, pinned by version and SHA-256 in
+both workflows because the binary runs with the credentials those jobs assume.
 
-A second pressure arrived from a direction this section did not anticipate, and
-it is the stronger of the two. [`apply.yml`](../.github/workflows/apply.yml)
-applies exactly one stack, and its own header lists the eight things that assume
-it. The day one stack reads another through `terraform_remote_state`, the
-problem stops being duplicated text and becomes ordering — and a workflow matrix
-has no `needs` between its legs, so parallel jobs plan against state that is
-stale or absent. Terragrunt's dependency blocks are one answer to that;
-explicit layers or a reusable workflow called once per layer are the others.
-Decide it with both pressures in view.
+What it does here is narrow on purpose:
 
-The layout above is what Terragrunt would use anyway. Adopting it adds
-`terragrunt.hcl` files; it does not move any directory. One caution for that
-day: `run-all` walks the whole tree, so `terragrunt run-all apply` from `live/`
-would build the two environments this project has decided not to build.
+| | |
+| --- | --- |
+| `terraform` block | Sources [`stacks/<name>`](../stacks/), derived from the unit's path. The `//` makes Terragrunt copy the whole repository into the cache, which is what lets `stacks/network` reference `../../modules/*` |
+| `generate "backend"` | Writes the S3 backend, key derived from the unit's path |
+| `generate "provider"` | Writes the provider, `Environment` tag derived from the same path |
+| `inputs` | Only `environment`, for the same reason |
+
+It is deliberately **not** using Terragrunt's `remote_state` block, which manages
+the state bucket — creating one that does not exist and enforcing settings on
+one that does. That bucket belongs to [`bootstrap/`](../bootstrap/), which gave
+it versioning, encryption, a public access block and a policy. Two things
+managing one bucket is drift with no owner, so Terragrunt is a code generator
+here and nothing else.
+
+### What this bought, beyond deleting lines
+
+The duplication was 48 un-parameterisable lines, which is not enough to justify
+a tool. Deriving the state key from the directory is, and consolidating the
+composition into `stacks/network` removed a trap each stack could previously get
+wrong in silence — see that directory's `main.tf` for the
+`endpoint_security_group_ids` wiring that is now impossible to state incorrectly.
+
+### The cost, stated plainly
+
+`terragrunt run --all` walks the whole tree. Run from `live/`, it would build
+`stage` and `prod` — the two environments this project has decided not to build.
+Nothing in this repository guards against that, and CI cannot do it by accident
+because it names one unit; a laptop can. It joins the existing gap that
+`devops-admin` could always apply `live/stage/network` by hand, which is
+accepted risk until the account split at `v9-govern`.
+
+The other cost is in [`stacks/network/outputs.tf`](../stacks/network/outputs.tf):
+one module publishes every environment's outputs, so two are always empty in any
+given environment.
+
+### Running it
+
+```
+cd live/dev/network
+terragrunt run -- plan
+terragrunt run -- apply
+```
+
+`run --` and not the bare shortcut: Terragrunt parses its own flags first, so a
+Terraform flag it does not recognise is an error about an unknown Terragrunt
+flag rather than a passthrough. The `--` ends Terragrunt's arguments.
+
+One caution for saved plans. Terraform runs inside `.terragrunt-cache/<hash>/<hash>`,
+so `-out=tfplan` writes into a scratch directory named by a content hash.
+[`apply.yml`](../.github/workflows/apply.yml) passes an absolute path for
+exactly this reason.

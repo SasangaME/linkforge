@@ -105,7 +105,7 @@ The table above changes at the end of a milestone only. Thus it holds no detail 
 | 5 | The load balancer, and a target group that health checks `/health` | Done |
 | 6 | `live/dev/network`, applied. `live/stage/network` and `live/prod/network`, written and validated only | Done |
 | 7 | The first workflow that applies. It declares `environment: dev`, and it is what tests step 1 | Done |
-| 8 | The Terragrunt decision, once the same backend block stands in three directories | Not started |
+| 8 | The Terragrunt decision, once the same backend block stands in three directories | Done |
 | 9 | The scheduled destroy of `dev`. The environment becomes ephemeral by construction rather than by memory | Not started |
 
 Step 1 is the only step of this milestone that is not code. It is [RUNBOOK.md](RUNBOOK.md) operation 5, and it blocks every step after it: an apply role whose trust policy pins `:environment:dev` cannot be assumed until an environment of that name exists to put the claim in the token.
@@ -191,7 +191,21 @@ Two defects survived `fmt`, `validate`, review and a clean plan, and both were f
 
 Neither is a mistake a review catches, and that is the point worth keeping: `validate` reads one directory's references and types, and a plan reasons about a graph. Only the API refuses.
 
-Step 8 is a decision and possibly no change. Terragrunt was deferred in `v0-bootstrap` because the duplication it removes did not exist yet. Step 6 created it: three backend blocks across three directories, twenty-seven lines differing in a single word, with no expression that could derive it — a backend block is read before variables exist. The pressure now arrives from a second direction too, which `apply.yml` records in its own header: the day one stack reads another through `terraform_remote_state`, a matrix has no `needs` between its legs, and ordering is the part Terragrunt's dependency blocks solve and a workflow matrix does not. Decide it with both in view rather than assuming either answer.
+Step 8 was the decision, and the answer was to adopt Terragrunt. What tipped it was not the line count.
+
+The duplication was measured before deciding, because "the same nine lines appear nine times" turned out to overstate it. Comparing `dev` to `stage` line by line, code only, the backend and provider blocks were 26 lines per stack of which **two** differed. `main.tf` and `outputs.tf` differed in five and six lines, and those differences were the environments themselves. About 48 lines of genuinely un-parameterisable duplication, not ninety.
+
+Forty-eight lines does not buy a new tool. Three things did.
+
+**The state key is the one value where a typo is silent and destructive.** A stack pointed at another environment's key adopts that environment's state and plans to destroy the difference. Terraform's own answer — partial configuration, `init -backend-config="key=..."` — removes the same lines and turns a literal that is right by construction into a flag every human and every workflow has to get right. Terragrunt derives the key from the unit's directory path, so it cannot disagree with where the file lives. The `Environment` tag is derived from the same path segment, so a stack can no longer write dev's state while tagging its resources prod.
+
+**Consolidating the stack removed a trap, not just repetition.** Each environment used to state its own `endpoint_security_group_ids`, and the wrong answer was the plausible one — `modules/network` creates that security group unconditionally, so its output is a real ID even where no endpoint is attached to it, and passing it through gave the host an egress rule to an empty group, no route to the internet, a clean apply, and an instance that never appeared in Session Manager. That wiring now derives from `interface_endpoint_az_count` inside [stacks/network](stacks/network/), in one place, and the mistake cannot be made from a caller.
+
+**The moment was free and would not have stayed free.** `dev` had been destroyed, so its state held no resources and no address could be orphaned by moving the composition out of `live/`. A day later the same change needs `terraform state mv` for every resource in it.
+
+What it costs is worth stating. A binary that is now on the apply path, pinned by version *and* SHA-256 because it runs with the apply role's credentials. `run --all` walks the whole tree, so a careless invocation from `live/` would build the two environments this project has decided not to build. And one module publishing every environment's outputs means two of them are always empty in any given environment, which is a real loss of signal recorded in that file rather than hidden.
+
+The layout is [stacks/network](stacks/network/) for the code, [live/root.hcl](live/root.hcl) for what is generated, and one `terragrunt.hcl` per environment holding arguments and nothing else.
 
 Step 9 makes the daily destroy a property of the repository rather than a habit. Every cost in this milestone is hourly, so `dev` is cheap when it is short-lived and the only thing keeping it short-lived today is memory. A scheduled workflow that destroys `live/dev/network` overnight turns a forgotten environment into one evening rather than one month, and returns the $10 budget alarm to being a backstop instead of the primary control.
 
