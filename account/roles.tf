@@ -188,6 +188,13 @@ resource "aws_iam_role_policy" "gha_apply_guardrail" {
 # The no_escalation guardrail still attaches to all of these roles, so nothing
 # below reaches IAM except the two statements that name one specific resource.
 data "aws_iam_policy_document" "provisioning" {
+  # The three Replace* actions are the update path and none of them fires on a
+  # first apply, which is why they are the easiest ones to leave out and the
+  # worst ones to be missing. ReplaceRouteTableAssociation is what moves a
+  # subnet from the shared private table to a per-zone one — the day
+  # nat_gateway_count goes above 1 and private_route_table_count stops being 1.
+  # ReplaceRoute is the same shape for a default route whose target changed.
+  # Both fail an apply that is already half done.
   statement {
     sid    = "Network"
     effect = "Allow"
@@ -211,8 +218,10 @@ data "aws_iam_policy_document" "provisioning" {
       "ec2:DescribeRouteTables",
       "ec2:AssociateRouteTable",
       "ec2:DisassociateRouteTable",
+      "ec2:ReplaceRouteTableAssociation",
       "ec2:CreateRoute",
       "ec2:DeleteRoute",
+      "ec2:ReplaceRoute",
       "ec2:CreateNatGateway",
       "ec2:DeleteNatGateway",
       "ec2:DescribeNatGateways",
@@ -260,12 +269,20 @@ data "aws_iam_policy_document" "provisioning" {
   # DescribeInstanceCreditSpecifications is not padding: t3 is a burstable
   # family, the provider reads the credit specification on every refresh, and
   # without it a plan fails after the instance exists rather than before.
+  #
+  # Stop and Start are not there to stop and start the host. Changing
+  # instance_type on an instance that already exists is a stop, a modify and a
+  # start, so without them a resize fails partway and leaves the machine down —
+  # a create and a destroy both work without either action, which is what makes
+  # this one invisible until it is needed.
   statement {
     sid    = "Instance"
     effect = "Allow"
     actions = [
       "ec2:RunInstances",
       "ec2:TerminateInstances",
+      "ec2:StopInstances",
+      "ec2:StartInstances",
       "ec2:DescribeInstances",
       "ec2:DescribeInstanceStatus",
       "ec2:DescribeInstanceAttribute",
