@@ -18,12 +18,21 @@ the same resources at `v2-fargate`, at `v7-edge` and at the end of the project.
 
 What changes at `v2-fargate` is the target and only the target. `target_type`
 moves from `instance` to `ip`, because a Fargate task has an ENI and no instance
-ID; `target_instance_id` goes null and the attachment resource disappears with
+ID; `target_instance_ids` goes empty and the attachment resource disappears with
 it, because an ECS service registers and deregisters its own tasks and a static
 attachment beside it would be removed and recreated on every deployment.
 
-That is why `target_instance_id` is nullable rather than required, and it is why
+That is why `target_instance_ids` is optional rather than required, and it is why
 the target group is written to survive being replaced. See below.
+
+It is a **list** rather than a nullable string for a reason that has nothing to
+do with ever wanting two. The attachment is switched on by `count`, and a count
+must be known when Terraform plans. The instance ID comes from a resource that
+does not exist yet, so `target_instance_id == null` compared an unknown against
+null, which is itself unknown, and the plan failed with *"The count value
+depends on resource attributes that cannot be determined until apply"*. The
+**length** of a one-element list is known even when the element inside it is
+not. An empty list is how `v2-fargate` says "register nothing".
 
 ## Interface
 
@@ -34,7 +43,7 @@ the target group is written to survive being replaced. See below.
 | `public_subnet_ids` | list(string) | — | Which zones the load balancer's nodes are placed in. At least two |
 | `allowed_cidrs` | list(string) | — | Who may open a connection to the listener |
 | `target_security_group_id` | string | — | The group this module writes an ingress rule into |
-| `target_instance_id` | string | `null` | The instance to register. Null from `v2-fargate` onwards |
+| `target_instance_ids` | list(string) | `[]` | The instance to register, as a list of at most one. Empty from `v2-fargate` onwards |
 | `listener_port` | number | `80` | What the world connects to |
 | `target_port` | number | `8080` | What the targets listen on, and what the health check uses |
 | `health_check_path` | string | `/health` | The route checked. Must not read a datastore |
@@ -171,7 +180,7 @@ aws elbv2 describe-target-health --target-group-arn <target_group_arn>
 | `initial` | Fewer than two checks have run. Wait 60 seconds |
 | `unhealthy` / `Target.Timeout` | The packet never arrived. The ingress rule this module writes is the suspect |
 | `unhealthy` / `Target.FailedHealthChecks` | It arrived and the answer was wrong. The responder or the matcher |
-| `unused` | Nothing is registered. `target_instance_id` was null |
+| `unused` | Nothing is registered. `target_instance_ids` was empty |
 
 The distinction between the two `unhealthy` reasons is the useful part, because
 it separates a network fault from an application fault without logging into

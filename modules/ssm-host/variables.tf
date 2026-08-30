@@ -41,12 +41,25 @@ variable "instance_profile_name" {
 # Optional, and the two cases are the two ways a private subnet reaches AWS.
 # When it is set the host talks to interface endpoints, whose ENIs are inside
 # the VPC and therefore have a security group that can be named. When it is
-# null the host talks through a NAT gateway to the public internet, where there
+# empty the host talks through a NAT gateway to the public internet, where there
 # is nothing to name but a CIDR. dev sets it; stage and prod do not.
-variable "endpoint_security_group_id" {
-  description = "Security group on the interface endpoint ENIs. Null in an environment that reaches the AWS APIs through a NAT gateway instead."
-  type        = string
-  default     = null
+#
+# A list holding at most one ID, rather than a nullable string, and it is forced
+# rather than stylistic. The two rules below are switched on by `count`, a count
+# must be known at plan time, and the caller passes a security group that
+# Terraform has not created yet. Comparing an unknown against null yields
+# unknown, and the plan fails. `length()` of a one-element list is known even
+# when the element is not — so the list is what makes the decision plan-time
+# knowable, and the empty list is what "no endpoints" now means.
+variable "endpoint_security_group_ids" {
+  description = "Security group on the interface endpoint ENIs, as a list of at most one. Empty in an environment that reaches the AWS APIs through a NAT gateway instead."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.endpoint_security_group_ids) <= 1
+    error_message = "The endpoint_security_group_ids value names at most one security group. modules/network creates exactly one for its interface endpoints."
+  }
 }
 
 # 8080 and not 80, so the responder needs no privileged port and no root. The

@@ -52,9 +52,10 @@ module "host" {
 
   instance_profile_name = data.aws_iam_instance_profile.ssm_host.name
 
-  # Set here, null in stage and prod. Read the comment in those stacks before
-  # copying this line into them.
-  endpoint_security_group_id = module.network.endpoint_security_group_id
+  # Set here, empty in stage and prod. Read the comment in those stacks before
+  # copying this line into them. A list of one — see the variable's comment for
+  # why the shape is what keeps the module's count knowable at plan time.
+  endpoint_security_group_ids = [module.network.endpoint_security_group_id]
 
   health_port = local.app_port
 }
@@ -76,7 +77,7 @@ module "alb" {
   target_port              = local.app_port
   target_security_group_id = module.host.security_group_id
 
-  # The one milestone where a target is a machine. v2-fargate sets this to null
+  # The one milestone where a target is a machine. v2-fargate empties this list
   # and lets the ECS service register and deregister its own tasks.
-  target_instance_id = module.host.instance_id
+  target_instance_ids = [module.host.instance_id]
 }
