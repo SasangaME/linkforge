@@ -140,14 +140,19 @@ resource "aws_lb_target_group" "this" {
   }
 }
 
-# Zero resources when target_instance_id is null, which is the v2-fargate case:
-# an ECS service registers its own tasks and a static attachment beside it
-# would be removed and recreated on every deployment.
+# Zero resources when the list is empty, which is the v2-fargate case: an ECS
+# service registers its own tasks and a static attachment beside it would be
+# removed and recreated on every deployment.
+#
+# `length()` and not a null comparison. The instance being registered does not
+# exist at plan time, so `target_instance_id == null` was an unknown compared
+# to null — unknown — and a count cannot be unknown. The length of a one-element
+# list is known even when the element is not. See README.md.
 resource "aws_lb_target_group_attachment" "instance" {
-  count = var.target_instance_id == null ? 0 : 1
+  count = length(var.target_instance_ids)
 
   target_group_arn = aws_lb_target_group.this.arn
-  target_id        = var.target_instance_id
+  target_id        = var.target_instance_ids[count.index]
   port             = var.target_port
 }
 

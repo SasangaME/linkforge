@@ -74,13 +74,19 @@ variable "target_security_group_id" {
   type        = string
 }
 
-# Optional, and null is the v2-fargate case rather than an error. An ECS
+# Optional, and empty is the v2-fargate case rather than an error. An ECS
 # service registers and deregisters its own tasks, so a target group with a
 # static attachment would fight it.
-variable "target_instance_id" {
-  description = "Instance to register, for the one milestone where a target is a machine rather than a service. Null leaves the target group empty."
-  type        = string
-  default     = null
+#
+# A list rather than a nullable string, because the attachment is switched on
+# by `count` and a count must be known at plan time. The instance ID arrives
+# from a resource that does not exist yet, so a comparison against null is a
+# comparison against an unknown; the length of the list is not. This is also
+# the shape the argument would want anyway on the day a second target appears.
+variable "target_instance_ids" {
+  description = "Instances to register, for the one milestone where a target is a machine rather than a service. Empty leaves the target group empty."
+  type        = list(string)
+  default     = []
 }
 
 variable "health_check_path" {

@@ -40,15 +40,23 @@ resource "aws_security_group" "host" {
 # reach ENIs inside the VPC, so the destination is a security group and not an
 # address. This is the tightest egress rule in the project and it is only
 # possible because the far end is something this account owns.
+#
+# `length()` and not a comparison against null, and the difference is the whole
+# reason this variable is a list. A count must be known at plan time, and the
+# caller passes a security group that does not exist yet — so `id == null` is
+# an unknown compared to null, which is unknown, and the plan fails outright
+# with "The count value depends on resource attributes that cannot be
+# determined until apply". The LENGTH of a one-element list is known even when
+# the element inside it is not. See README.md.
 resource "aws_vpc_security_group_egress_rule" "endpoints" {
-  count = var.endpoint_security_group_id == null ? 0 : 1
+  count = length(var.endpoint_security_group_ids)
 
   security_group_id            = aws_security_group.host.id
   description                  = "HTTPS to the interface endpoint ENIs"
   ip_protocol                  = "tcp"
   from_port                    = 443
   to_port                      = 443
-  referenced_security_group_id = var.endpoint_security_group_id
+  referenced_security_group_id = var.endpoint_security_group_ids[count.index]
 
   tags = merge(var.tags, { Name = "${var.name_prefix}-ssm-host-endpoints" })
 }
@@ -58,7 +66,7 @@ resource "aws_vpc_security_group_egress_rule" "endpoints" {
 # environment with a NAT gateway has a strictly looser egress rule than the one
 # without, which is the opposite of how the cost table reads.
 resource "aws_vpc_security_group_egress_rule" "internet" {
-  count = var.endpoint_security_group_id == null ? 1 : 0
+  count = length(var.endpoint_security_group_ids) == 0 ? 1 : 0
 
   security_group_id = aws_security_group.host.id
   description       = "HTTPS to the AWS APIs through the NAT gateway"

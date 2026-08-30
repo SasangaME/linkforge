@@ -30,7 +30,7 @@ container at `v2-fargate` inherits all four.
 | `vpc_id` | string | — | Where the security group lives |
 | `subnet_id` | string | — | Which private subnet, and so which zone |
 | `instance_profile_name` | string | — | `linkforge-ssm-host`, from `account/workload_roles.tf` |
-| `endpoint_security_group_id` | string | `null` | How the host reaches the AWS APIs. Set means endpoints; null means a NAT gateway |
+| `endpoint_security_group_ids` | list(string) | `[]` | How the host reaches the AWS APIs. Set means endpoints; empty means a NAT gateway |
 | `instance_type` | string | `t3.micro` | Matched to the AMI's architecture, which is x86_64 |
 | `health_port` | number | `8080` | What the responder binds and [`modules/alb`](../alb/) health checks |
 | `tags` | map | `{}` | Extra tags. The provider's `default_tags` already carry the project-wide four |
@@ -77,10 +77,16 @@ The host has to reach three SSM services and S3. *How* it reaches them is the
 one thing that is not the same in `dev` as in `stage` and `prod`, and it
 arrives as an argument rather than as two copies of the module.
 
-| | `endpoint_security_group_id` | Rules created |
+| | `endpoint_security_group_ids` | Rules created |
 | --- | --- | --- |
-| `dev` | The network module's endpoint group | 443 to that group, 443 to the S3 prefix list |
-| `stage`, `prod` | `null` | 443 to `0.0.0.0/0`, 443 to the S3 prefix list |
+| `dev` | The network module's endpoint group, in a list of one | 443 to that group, 443 to the S3 prefix list |
+| `stage`, `prod` | `[]` | 443 to `0.0.0.0/0`, 443 to the S3 prefix list |
+
+A list of at most one rather than a nullable string, and it is not a taste
+decision. Both rules are switched on by `count`, a count must be known at plan
+time, and the group the caller passes does not exist yet — so comparing it
+against null produced an unknown and the plan failed outright. `length()` of a
+one-element list is known even when the element is not.
 
 The asymmetry is real and not a modelling convenience. With interface
 endpoints the far end of the connection is an ENI in this VPC, so it has a
