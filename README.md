@@ -33,6 +33,24 @@ Building more application than the infrastructure can currently serve is exactly
 
 The application is Python. The framework choice is deferred to `v2-fargate` and matters in four ways only: it must expose a `/health` route for the ALB target group, listen on the port the task definition declares, be async (the redirect blocks on DynamoDB, and a sync worker blocks everything else with it), and run as a single process per container so CPU stays a clean autoscaling signal. The container image is the real interface between the application and everything in this repository — nothing downstream of ECR knows or cares what is inside it, which is also what makes a later change of language cheap.
 
+### Where it lives, and why not in its own repository
+
+`app/`, a sibling of `modules/` and not a Terraform module. Application source is called by neither a stack nor a module, and putting it under `modules/` would break the one property that directory has — that a module is a resource graph a stack supplies arguments to.
+
+```
+linkforge/
+├── account/                 root module. IAM, OIDC, the account baseline. Hand-applied
+├── bootstrap/               root module. The state bucket. Applied once, never again
+├── live/<env>/<stack>/      one directory per environment per stack. Arguments only
+├── modules/                 resource graphs. No environment name appears in here
+├── app/                     the application. Arrives at v2-fargate
+└── .github/workflows/       plan on every pull request; apply from v1-network step 7
+```
+
+One repository rather than two, and the reason is not a preference about monorepos. Every role in this account trusts `repo:SasangaME@12818777/linkforge@1330896942:...` with `StringEquals`, so a second repository — different numeric IDs — could not assume any of them without either a duplicate set of roles or a wildcard across the owner, which is the loosening this project declined when those IDs were first pinned. The image tag is the other half: in one repository the task definition's tag and the code that produced it move in the same commit, reviewed together and promoted together. Across two, the tag has to be carried over by a bot, a dispatch, or the answer people actually reach for — `:latest` and a forced redeployment, which discards the property that the reviewed thing is provably the applied thing.
+
+What the split would genuinely buy is cadence, and that is bought here with path filters instead: the plan workflow discovers stacks under `account`, `live` and `modules` and is already blind to `app/`, so the build workflow runs on `app/**` and neither queues behind the other's state lock. The signal to revisit is a team shipping the application several times a day against infrastructure that changes monthly — not this project, not yet. And the split stays cheap, because the image URI is the only coupling: `git filter-repo --path app/` lifts the directory out with its history and the infrastructure loses nothing, having never referenced a source file.
+
 Scaling is horizontal and lives in the infrastructure, not the app. On ECS that means service auto scaling — `aws_appautoscaling_target` with a target-tracking policy on service CPU or the ALB's `RequestCountPerTarget`. It is the same idea as a Kubernetes HPA, but a different resource with a different API; there is no HPA outside Kubernetes, and this project deliberately stays on ECS. The only thing the application owes horizontal scale is statelessness, which is why the in-memory map at `v2-fargate` is a stub and `v4-state` is where replicas become genuinely interchangeable.
 
 ## Why this product and not a to-do app
