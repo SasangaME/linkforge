@@ -12,15 +12,26 @@ are two separate root modules calling the same module out of [`modules/`](../mod
 with different arguments. The module holds the resource graph; the directory
 holds the decisions.
 
-Nothing exists here yet. `v1-network` writes the first stack.
+`v1-network` wrote the first three: [`dev/network`](dev/network/), [`stage/network`](stage/network/) and [`prod/network`](prod/network/). Each calls the same three modules and differs only in its arguments.
 
 ## What is applied
 
 | Environment | Applied | Reachable from CI |
 | --- | --- | --- |
-| `dev` | Yes | Yes |
+| `dev` | Built on demand, then destroyed | Yes |
 | `stage` | No — configuration only | No |
 | `prod` | No — configuration only | No |
+
+`dev` is not standing. It was built end to end by the pipeline on 2026-08-30,
+verified, and destroyed the same evening; the state file is still there with a
+lineage and a serial and no resources in it. That is the intended steady state
+until step 9 makes the teardown automatic — every cost in this milestone is
+hourly, so the number that decides the bill is how many hours the environment
+existed, and nothing in any `.tf` file decides that.
+
+An empty state file is not the same as no state file, and the difference
+matters on the next apply: the lineage is what lets Terraform recognise the
+state as the same one rather than refusing to write over a stranger's.
 
 Stage and prod are written and checked but never built. That is a deliberate
 cost decision, not an unfinished one: three environments of `v1-network` is
@@ -169,10 +180,21 @@ numbers in a stack file and nothing else.
 
 ## Terragrunt
 
-Not yet. The duplication Terragrunt removes — a backend block that cannot take a
-variable, repeated once per stack per environment — does not exist until there
-are stacks to repeat it across. Revisit at `v1-network`, when the first stack
-lands in all three directories and the same nine lines appear nine times.
+The duplication now exists, which is what step 8 of `v1-network` was waiting
+for. Three `versions.tf` files carry the same backend block with one word
+different, and none of it can be interpolated: a backend block is read before
+variables are evaluated, so `bucket`, `key` and `region` are literals or they
+are nothing.
+
+A second pressure arrived from a direction this section did not anticipate, and
+it is the stronger of the two. [`apply.yml`](../.github/workflows/apply.yml)
+applies exactly one stack, and its own header lists the eight things that assume
+it. The day one stack reads another through `terraform_remote_state`, the
+problem stops being duplicated text and becomes ordering — and a workflow matrix
+has no `needs` between its legs, so parallel jobs plan against state that is
+stale or absent. Terragrunt's dependency blocks are one answer to that;
+explicit layers or a reusable workflow called once per layer are the others.
+Decide it with both pressures in view.
 
 The layout above is what Terragrunt would use anyway. Adopting it adds
 `terragrunt.hcl` files; it does not move any directory. One caution for that
