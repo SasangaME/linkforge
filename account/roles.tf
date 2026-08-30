@@ -189,8 +189,8 @@ resource "aws_iam_role_policy" "gha_apply_guardrail" {
 # below reaches IAM except the two statements that name one specific resource.
 data "aws_iam_policy_document" "provisioning" {
   statement {
-    sid     = "Network"
-    effect  = "Allow"
+    sid    = "Network"
+    effect = "Allow"
     actions = [
       "ec2:CreateVpc",
       "ec2:DeleteVpc",
@@ -239,8 +239,8 @@ data "aws_iam_policy_document" "provisioning" {
   # what may open a connection to what, and they are worth being able to read
   # on their own in the console.
   statement {
-    sid     = "SecurityGroups"
-    effect  = "Allow"
+    sid    = "SecurityGroups"
+    effect = "Allow"
     actions = [
       "ec2:CreateSecurityGroup",
       "ec2:DeleteSecurityGroup",
@@ -261,8 +261,8 @@ data "aws_iam_policy_document" "provisioning" {
   # family, the provider reads the credit specification on every refresh, and
   # without it a plan fails after the instance exists rather than before.
   statement {
-    sid     = "Instance"
-    effect  = "Allow"
+    sid    = "Instance"
+    effect = "Allow"
     actions = [
       "ec2:RunInstances",
       "ec2:TerminateInstances",
@@ -284,8 +284,8 @@ data "aws_iam_policy_document" "provisioning" {
   }
 
   statement {
-    sid     = "LoadBalancer"
-    effect  = "Allow"
+    sid    = "LoadBalancer"
+    effect = "Allow"
     actions = [
       "elasticloadbalancing:CreateLoadBalancer",
       "elasticloadbalancing:DeleteLoadBalancer",
