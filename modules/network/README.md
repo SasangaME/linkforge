@@ -183,7 +183,7 @@ wrong one anywhere else.
 | `vpc_id` | Every security group and endpoint built on this network |
 | `vpc_cidr_block` | The endpoint security group's source range, step 3 |
 | `availability_zones` | Ordering for the subnet lists |
-| `public_subnet_ids` | The load balancer, step 5 |
+| `public_subnet_ids` | The load balancer, [`modules/alb`](../alb/) |
 | `private_subnet_ids` | The host, step 4. The interface endpoints, step 3 |
 | `private_route_table_ids` | The S3 gateway endpoint, step 3 — it attaches to route tables, not subnets |
 | `public_route_table_id` | The same, if anything public ever needs S3 |
@@ -197,7 +197,8 @@ asked for.
 
 ## Not in this module
 
-The host is step 4 and the load balancer is step 5; both belong elsewhere. The
+The host is [`modules/ssm-host`](../ssm-host/) and the load balancer is
+[`modules/alb`](../alb/); both belong elsewhere. The
 load balancer in particular gets its own module, because at `v2-fargate` its
 target group points at an ECS service and it becomes part of the service rather
 than part of the network.
