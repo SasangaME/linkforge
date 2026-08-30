@@ -33,6 +33,12 @@ env:
   AWS_REGION: us-east-1
   TF_VERSION: 1.14.6
   TF_IN_AUTOMATION: "true"
+  # Pinned by version AND by checksum, for the same reason the actions below
+  # are pinned by commit SHA rather than by tag: a tag is a moving pointer that
+  # the publisher can repoint. This is a binary that runs with the credentials
+  # this job assumes.
+  TG_VERSION: 1.1.4
+  TG_SHA256: a2640da8455fa5f3671167e6373832b0907b9dc972dd01c2093cc7808934e158
 
 jobs:
   plan:
@@ -57,11 +63,29 @@ jobs:
           # here consumes. Off, so the logs carry Terraform's own output.
           terraform_wrapper: false
 
+      # v1-network step 8. live/ holds no .tf files any more: the backend and
+      # provider blocks are generated from live/root.hcl and the stack itself
+      # lives in stacks/network. Nothing under live/ can be planned without it.
+      - name: install terragrunt
+        run: |
+          set -eu
+          url="https://github.com/gruntwork-io/terragrunt/releases/download/v${TG_VERSION}/terragrunt_linux_amd64"
+          curl -sSLo /tmp/terragrunt "$url"
+          echo "${TG_SHA256}  /tmp/terragrunt" | sha256sum -c -
+          chmod +x /tmp/terragrunt
+          sudo mv /tmp/terragrunt /usr/local/bin/terragrunt
+          terragrunt --version
+
       # The cheapest gate, and it needs no AWS access. Run it before the job
-      # holds any credentials. -recursive covers bootstrap/ and account/ from
-      # the repository root.
+      # holds any credentials. -recursive covers bootstrap/, account/ and
+      # stacks/ from the repository root.
       - name: fmt
         run: terraform fmt -check -recursive
+
+      # terraform fmt does not read .hcl, so without this the Terragrunt files
+      # are the only unformatted code in the repository.
+      - name: terragrunt fmt
+        run: terragrunt hcl fmt --check --diff
 
       # Every environment's configuration is checked on every pull request,
       # including the two that are never applied. -backend=false installs the
@@ -92,7 +116,19 @@ jobs:
           # check that only exists inside CI is a check you stop trusting.
           # Stack paths are lowercase and contain no spaces; live/README.md
           # says so and the environments variable validates it.
-          stacks="$(find account live modules -name '*.tf' -exec dirname {} \; | sort -u)"
+          #
+          # live/ is no longer walked and that is not an omission. Since step 8
+          # it holds .hcl only, and stacks/network — the code all three
+          # environments run — is checked once here instead of three times.
+          # What is no longer checked per environment is nothing: the three
+          # units differ only in `inputs`, and a wrong input is a value error
+          # that `validate` never had an opinion about anyway.
+          #
+          # stacks/network validates with plain terraform despite having no
+          # backend and no provider block. validate needs neither, which is
+          # what keeps this step credential-free and above the step that
+          # acquires them.
+          stacks="$(find account stacks modules -name '*.tf' -exec dirname {} \; | sort -u)"
           if [ -z "$stacks" ]; then
             echo "no stacks to validate yet"
             exit 0
@@ -112,6 +148,20 @@ jobs:
             echo "::endgroup::"
           done
           rm -rf "$scratch"
+
+      # The other half of the same gate. The loop above proves the Terraform
+      # parses; this proves the Terragrunt around it does — an include that
+      # points nowhere, a function that does not exist, a heredoc that does not
+      # evaluate. It is HCL evaluation only and needs no AWS, so it belongs
+      # above the credentials too.
+      #
+      # Recursive by default from the repository root; there is no --all. What
+      # it does NOT check is whether an `inputs` key matches a variable
+      # stacks/network declares — that needs --inputs, which is left off until
+      # its behaviour on unused keys has been seen on a real run rather than
+      # assumed. An unknown input is caught by terraform at plan either way.
+      - name: terragrunt validate
+        run: terragrunt hcl validate
 
       - name: assume the plan role
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6

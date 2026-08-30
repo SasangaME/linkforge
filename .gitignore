@@ -28,3 +28,19 @@ crash.*.log
 # Lock files belong to root modules. A child module under modules/ gets one
 # only as a side effect of running init there by hand.
 modules/*/.terraform.lock.hcl
+
+# The root module since step 8 is stacks/<name>/, and its lock file IS
+# committed — it is what pins the provider version for every environment.
+# Terragrunt copies it into the cache (terraform.include_in_copy in
+# live/root.hcl) and then writes the result back into the unit directory it
+# ran from. Those copies are derived and byte-identical to the one above, so
+# they are ignored: two tracked answers to "which provider version" is one
+# more than can be kept in step.
+live/*/*/.terraform.lock.hcl
+
+# Terragrunt's generated backend.tf and provider.tf need no entry here. Their
+# `path` is relative to the Terraform working directory, and since Terragrunt
+# 1.0 that is always inside .terragrunt-cache — which is already ignored above.
+# Verified rather than assumed: they land at
+# live/<env>/network/.terragrunt-cache/<hash>/<hash>/stacks/network/.
+# Nothing derived is ever written into a unit directory.

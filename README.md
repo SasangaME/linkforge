@@ -41,7 +41,9 @@ The application is Python. The framework choice is deferred to `v2-fargate` and 
 linkforge/
 ├── account/                 root module. IAM, OIDC, the account baseline. Hand-applied
 ├── bootstrap/               root module. The state bucket. Applied once, never again
-├── live/<env>/<stack>/      one directory per environment per stack. Arguments only
+├── live/<env>/<stack>/      terragrunt units. Arguments only, no .tf at all
+├── live/root.hcl            what every unit derives: state key, tags, stack source
+├── stacks/<stack>/          root modules. One per stack, shared by all environments
 ├── modules/                 resource graphs. No environment name appears in here
 ├── app/                     the application. Arrives at v2-fargate
 └── .github/workflows/       plan on every pull request; apply from v1-network step 7
@@ -77,7 +79,7 @@ See [ROADMAP.md](ROADMAP.md) for the milestone list and current status.
 
 ## What exists today
 
-`v0-bootstrap` closed on 2026-08-29 and `v1-network` is in progress, seven of its nine steps done. The network has now been built: on 2026-08-30 the pipeline applied `live/dev/network` end to end, a host with no address and no key pair registered with Session Manager, and the load balancer's target group reported `healthy` with `/health` answering 200 from the public internet. Then it was destroyed, which is the intended steady state — every cost in this milestone is hourly, and step 9 is what stops the teardown depending on someone remembering.
+`v0-bootstrap` closed on 2026-08-29 and `v1-network` is in progress, eight of its nine steps done. The network has now been built: on 2026-08-30 the pipeline applied `live/dev/network` end to end, a host with no address and no key pair registered with Session Manager, and the load balancer's target group reported `healthy` with `/health` answering 200 from the public internet. Then it was destroyed, which is the intended steady state — every cost in this milestone is hourly, and step 9 is what stops the teardown depending on someone remembering.
 
 ### `v0-bootstrap`, closed
 
@@ -132,6 +134,8 @@ The first is that **a `count` cannot be unknown at plan time.** The load balance
 The second is that **AWS validates a security group rule description against a fixed character set**, and it excludes the em dash, the apostrophe, the backtick and angle brackets — every character this repository writes prose with. The rejection arrives at apply, after the group and its earlier rules already exist. Comments above a resource may say anything; strings that cross the API may not.
 
 Neither is a mistake that review catches. `validate` reads the references and types inside one directory, and a plan reasons about a graph it can construct. Only the API refuses.
+
+Step 8 then moved that composition out of `live/` entirely. The three environments now run one root module, [stacks/network/](stacks/network/), and each `live/<env>/network/` holds a single `terragrunt.hcl` of arguments. Terragrunt derives the state key and the `Environment` tag from the unit's own directory path, which is the part worth adopting a tool for: a wrong state key is the one mistake here that is both silent and destructive, because a stack that adopts another environment's state plans to destroy the difference. The duplication it also removed came to 48 lines, and 48 lines would not have been enough on its own — the reasoning is in [ROADMAP.md](ROADMAP.md) and [live/README.md](live/README.md).
 
 [modules/network/](modules/network/) is the VPC, its subnets, and everything that decides where a packet goes — one module for all three environments, because a staging environment that differs from production in its code rather than in its arguments is not testing production. The three environments differ in exactly one dimension, which is what is allowed to cost money while idle, and that difference arrives as three numbers: how many zones, how many NAT gateways, how many zones get interface endpoints. The last two default to zero together and the module rejects that combination, because an environment with neither has no route from its private subnets to the AWS APIs and it is a mistake that applies cleanly, builds every resource, and leaves every instance unreachable with nothing in the plan to say so.
 
