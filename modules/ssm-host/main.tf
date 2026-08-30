@@ -81,9 +81,17 @@ resource "aws_vpc_security_group_egress_rule" "internet" {
 # Unconditional, because the S3 gateway endpoint is created in every
 # environment — it is free, so there is no count switching it off. Redundant
 # in an environment that already allows 443 everywhere, and harmless there.
+#
+# No em dash in the description, and it is not a house-style rule. AWS validates
+# a security group rule description against a fixed set — a-zA-Z0-9 and
+# ._-:/()#,@[]+=&;{}!$* — which excludes every character this repository writes
+# prose with: the em dash, the apostrophe, the backtick, angle brackets. The
+# rejection is InvalidParameterValue at apply, after the group and its earlier
+# rules already exist. Comments above a resource are free to say anything;
+# strings that cross the API are not.
 resource "aws_vpc_security_group_egress_rule" "s3" {
   security_group_id = aws_security_group.host.id
-  description       = "HTTPS to S3 through the gateway endpoint — agent updates and plugin binaries"
+  description       = "HTTPS to S3 through the gateway endpoint: agent updates and plugin binaries"
   ip_protocol       = "tcp"
   from_port         = 443
   to_port           = 443
