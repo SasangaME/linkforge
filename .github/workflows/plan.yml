@@ -15,6 +15,12 @@ name: terraform plan
 # it has to be widened, because release/* is the branch that reaches stage and
 # prod. A hotfix opened against a release branch that got no plan would be a
 # change reviewed less carefully than the one that reaches dev.
+#
+# There is deliberately no `paths` filter. A pull request that touches no
+# Terraform discovers no roots, skips every step that costs anything, and still
+# reports success — which is what a required status check needs. A `paths`
+# filter would make the check not run at all, and a required check that never
+# runs blocks the merge forever.
 on:
   pull_request:
     branches:
@@ -25,6 +31,13 @@ on:
 # file, and the second fails. Queue rather than cancel: cancelling kills
 # Terraform mid-plan while it holds the lock, and the lock is released only on
 # a graceful exit, so the following run meets a lock that belongs to nobody.
+#
+# What this group does NOT serialise is two different pull requests, and since
+# this workflow started planning live units that matters: two open PRs both
+# touching modules/ both want dev/network/terraform.tfstate.tflock. That is
+# what -lock-timeout=5m below absorbs — one waits rather than failing. A plan
+# that waits out the full five minutes behind an apply on main is the signal
+# that the timeout is too short, not that the lock is wrong.
 concurrency:
   group: terraform-plan-${{ github.ref }}
   cancel-in-progress: false
@@ -39,6 +52,37 @@ env:
   # this job assumes.
   TG_VERSION: 1.1.4
   TG_SHA256: a2640da8455fa5f3671167e6373832b0907b9dc972dd01c2093cc7808934e158
+  # Terragrunt picks terraform automatically when it is the only binary on the
+  # PATH, which it is here. Stated anyway, as in apply.yml: the day a runner
+  # image ships tofu as well, the automatic choice changes underneath this
+  # workflow.
+  TG_TF_PATH: terraform
+
+  # WHICH ENVIRONMENTS GET A PLAN, as opposed to which get validated.
+  #
+  # This is the one deliberate gap between "plan everything this pull request
+  # changes" and what the job actually does, and it is the same decision the
+  # earlier version of this file stated for stage and prod: planning an
+  # environment that has never been applied prints its entire resource graph as
+  # "to add" on every pull request forever, and a plan nobody reads is worse
+  # than no plan at all.
+  #
+  # A changed unit outside this list is not dropped in silence. It is validated
+  # like every other unit, and the pull request comment lists it as changed and
+  # deliberately unplanned. The day stage is promoted, this becomes "dev stage"
+  # and nothing else in the file moves.
+  PLAN_ENVIRONMENTS: dev
+
+  # The comment is edited in place rather than appended to the pull request on
+  # every push, so it needs to be findable. An HTML comment is invisible in the
+  # rendered body and survives GitHub's markdown pipeline unchanged.
+  COMMENT_MARKER: "<!-- linkforge-terraform-plan -->"
+  # A pull request comment body is capped at 65536 characters. This is the
+  # budget shared between every plan in the comment; the table, the headings
+  # and the footer live in what is left. Exceeding the cap is a 422 from the
+  # API, so this is not a nicety — an unbudgeted comment fails the step on the
+  # first pull request with a real greenfield plan in it.
+  COMMENT_BUDGET: 55000
 
 jobs:
   plan:
@@ -47,20 +91,135 @@ jobs:
 
     permissions:
       # Permission to mint the OIDC token. It grants write access to nothing.
-      # Declaring the block at all drops the job token to exactly these two.
       id-token: write
       contents: read
+      # New, and the only write scope in either workflow. A pull request
+      # comment is an issue comment, and this is the scope that covers it.
+      # Note what it is NOT: `contents: write`. This job cannot push.
+      pull-requests: write
 
     steps:
+      # fetch-depth: 0, and it is load-bearing now. The step below diffs the
+      # base branch against the head, and that needs the merge base — which a
+      # shallow clone does not have. A fixed depth is a guess at how far the
+      # branch has diverged; this repository is small enough that the full
+      # history is cheaper than being wrong.
       - name: checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      # WHAT THIS PULL REQUEST ACTUALLY TOUCHES.
+      #
+      # This replaces the hardcoded `bootstrap` that the rest of the job used
+      # to plan. The mapping is the whole design and it is worth stating:
+      #
+      #   bootstrap/**        -> bootstrap
+      #   account/**          -> account
+      #   live/<env>/<stack>/ -> that unit
+      #   modules/**          -> EVERY live unit, and neither of the two above
+      #   stacks/**           -> EVERY live unit, and neither of the two above
+      #   live/root.hcl       -> EVERY live unit, and neither of the two above
+      #   this file           -> everything
+      #
+      # The three fan-out rules are the reason a per-directory diff is not
+      # enough on its own. A change to modules/network touches no file under
+      # live/, and is invisible until something plans a caller — which is
+      # exactly the change most likely to be wrong.
+      #
+      # This file fanning out to everything is not vanity. A pull request that
+      # edits this job is the one pull request where the only useful evidence
+      # is a full run.
+      #
+      # It runs before the toolchain is installed, deliberately: it needs git
+      # and nothing else, and a job that discovers no roots should not spend
+      # two minutes installing Terraform to find that out.
+      - name: discover the roots this pull request touches
+        id: discover
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -eu
+          work="$RUNNER_TEMP/plan"
+          mkdir -p "$work"
+
+          # Three dots, not two. `git diff a...b` compares b against the merge
+          # base, which is the diff GitHub renders in Files changed. Two dots
+          # would compare against the current tip of main and report every
+          # unrelated commit merged since this branch was cut as a change of
+          # this pull request's — planning roots nobody here touched.
+          echo "::group::changed files"
+          git diff --name-only "$BASE_SHA...$HEAD_SHA" | tee "$work/changed.txt"
+          echo "::endgroup::"
+
+          : > "$work/roots.txt"
+          : > "$work/deferred.txt"
+
+          # Two scopes, not one, and collapsing them would be wrong in a way
+          # that costs four minutes on every module change. A change under
+          # modules/ or stacks/ reaches every live unit and reaches NEITHER
+          # bootstrap nor account — those two compose nothing and call nothing.
+          # Only a change to this file widens to everything, because a pull
+          # request editing this job is the one where a partial run is no
+          # evidence at all.
+          scope_all=false
+          scope_units=false
+          if grep -q '^\.github/workflows/plan\.yml$' "$work/changed.txt"; then
+            scope_all=true
+            scope_units=true
+            echo "this workflow changed: every root is in scope"
+          fi
+          if grep -qE '^(modules/|stacks/|live/root\.hcl$)' "$work/changed.txt"; then
+            scope_units=true
+            echo "shared Terraform changed: every live unit is in scope"
+          fi
+
+          if [ "$scope_all" = true ] || grep -q '^bootstrap/' "$work/changed.txt"; then
+            echo "bootstrap terraform" >> "$work/roots.txt"
+          fi
+          if [ "$scope_all" = true ] || grep -q '^account/' "$work/changed.txt"; then
+            echo "account terraform" >> "$work/roots.txt"
+          fi
+
+          # Discovered, not listed, for the same reason the validate loop below
+          # discovers roots: a second stack should need no edit here. A unit is
+          # a directory holding a terragrunt.hcl; root.hcl is a different name
+          # and is correctly not one.
+          #
+          # `while read`, not `for unit in $units`. Word splitting an unquoted
+          # variable is a bash behaviour and zsh does not do it — so the `for`
+          # form iterates ONCE over the whole newline-joined blob on a Mac,
+          # where zsh has been the default shell since Catalina. It fails
+          # silently: the loop runs, matches nothing, and reports no units.
+          # (The validate step below still has the `for` form and the same
+          # blind spot. Left alone here; it is not this change.)
+          find live -name terragrunt.hcl -not -path '*/.terragrunt-cache/*' -exec dirname {} \; | sort |
+          while read -r unit; do
+            if [ "$scope_units" = true ] || grep -qE "^$unit/" "$work/changed.txt"; then
+              # live/<env>/<stack> — field 2 is the environment, and it is the
+              # same segment root.hcl derives the state key and the Environment
+              # tag from. One convention, read three times.
+              env_name="$(echo "$unit" | cut -d/ -f2)"
+              case " $PLAN_ENVIRONMENTS " in
+                *" $env_name "*) echo "$unit terragrunt" >> "$work/roots.txt" ;;
+                *)               echo "$unit" >> "$work/deferred.txt" ;;
+              esac
+            fi
+          done
+
+          count="$(wc -l < "$work/roots.txt" | tr -d ' ')"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "planning $count root(s):"
+          cat "$work/roots.txt"
 
       - name: install terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
         with:
           terraform_version: ${{ env.TF_VERSION }}
           # The wrapper exists to expose stdout as step outputs, which nothing
-          # here consumes. Off, so the logs carry Terraform's own output.
+          # here consumes. Off, so the logs carry Terraform's own output — and
+          # so the plan text this job captures is Terraform's, unwrapped.
           terraform_wrapper: false
 
       # v1-network step 8. live/ holds no .tf files any more: the backend and
@@ -79,6 +238,10 @@ jobs:
       # The cheapest gate, and it needs no AWS access. Run it before the job
       # holds any credentials. -recursive covers bootstrap/, account/ and
       # stacks/ from the repository root.
+      #
+      # Repository-wide and NOT scoped to what changed. Formatting is cheap
+      # enough that discovering roots to save a second would be the expensive
+      # half.
       - name: fmt
         run: terraform fmt -check -recursive
 
@@ -95,20 +258,15 @@ jobs:
       # silent rot, and it catches syntax, types and references but nothing
       # that only the AWS API can refuse.
       #
-      # There is deliberately no `plan` for stage and prod. Planning an
-      # environment that does not exist prints its entire resource graph as
-      # "to add" on every pull request forever, and a plan nobody reads is
-      # worse than no plan at all.
+      # bootstrap/ joined this loop when the job stopped hardcoding it. It used
+      # to get its own `validate` after `init`, below the credentials, which
+      # proved nothing extra — validate never reads the backend — and proved it
+      # later than it could have.
       #
-      # modules/ is walked too, even though nothing calls a module until
-      # live/dev/network exists. A module directory validates standalone —
+      # modules/ is walked too. A module directory validates standalone —
       # validate needs no variable values — so this is the only check on a
       # module written in one pull request and first called in another.
-      #
-      # The loop discovers stacks rather than listing them, so `v1-network`
-      # adding live/dev/network needs no edit here. It exits cleanly while
-      # live/ is still empty.
-      - name: validate every environment
+      - name: validate every root
         run: |
           set -eu
           # Word-split on whitespace rather than mapfile, which bash 3.2 does
@@ -117,8 +275,8 @@ jobs:
           # Stack paths are lowercase and contain no spaces; live/README.md
           # says so and the environments variable validates it.
           #
-          # live/ is no longer walked and that is not an omission. Since step 8
-          # it holds .hcl only, and stacks/network — the code all three
+          # live/ is not walked and that is not an omission. Since step 8 it
+          # holds .hcl only, and stacks/network — the code all three
           # environments run — is checked once here instead of three times.
           # What is no longer checked per environment is nothing: the three
           # units differ only in `inputs`, and a wrong input is a value error
@@ -128,23 +286,23 @@ jobs:
           # backend and no provider block. validate needs neither, which is
           # what keeps this step credential-free and above the step that
           # acquires them.
-          stacks="$(find account stacks modules -name '*.tf' -exec dirname {} \; | sort -u)"
-          if [ -z "$stacks" ]; then
-            echo "no stacks to validate yet"
+          roots="$(find account bootstrap modules stacks -name '*.tf' -exec dirname {} \; | sort -u)"
+          if [ -z "$roots" ]; then
+            echo "nothing to validate"
             exit 0
           fi
           scratch="$(mktemp -d)"
-          for stack in $stacks; do
-            echo "::group::validate $stack"
+          for root in $roots; do
+            echo "::group::validate $root"
             # TF_DATA_DIR keeps this out of any .terraform/ that a real init
             # already wrote. A runner checkout has none, but a laptop does, and
             # there `init -backend=false` fails reaching for the very backend
             # it was told to skip. An absolute path, because a relative one
             # resolves against -chdir rather than against here.
-            TF_DATA_DIR="$scratch/$(echo "$stack" | tr / _)" \
-              terraform -chdir="$stack" init -backend=false -input=false
-            TF_DATA_DIR="$scratch/$(echo "$stack" | tr / _)" \
-              terraform -chdir="$stack" validate
+            TF_DATA_DIR="$scratch/$(echo "$root" | tr / _)" \
+              terraform -chdir="$root" init -backend=false -input=false
+            TF_DATA_DIR="$scratch/$(echo "$root" | tr / _)" \
+              terraform -chdir="$root" validate
             echo "::endgroup::"
           done
           rm -rf "$scratch"
@@ -155,6 +313,9 @@ jobs:
       # evaluate. It is HCL evaluation only and needs no AWS, so it belongs
       # above the credentials too.
       #
+      # This is also the entire check on a stage or prod unit, which is why the
+      # comment below reports those as "validated" rather than as "skipped".
+      #
       # Recursive by default from the repository root; there is no --all. What
       # it does NOT check is whether an `inputs` key matches a variable
       # stacks/network declares — that needs --inputs, which is left off until
@@ -163,7 +324,11 @@ jobs:
       - name: terragrunt validate
         run: terragrunt hcl validate
 
+      # Everything from here to the plan is conditional on there being
+      # something to plan. A docs-only pull request assumes no role, makes no
+      # STS call and appears in no CloudTrail entry.
       - name: assume the plan role
+        if: steps.discover.outputs.count != '0'
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
         with:
           role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
@@ -180,24 +345,321 @@ jobs:
       # assumed-role/linkforge-gha-plan. Anything else means some other
       # identity is doing the work.
       - name: whoami
+        if: steps.discover.outputs.count != '0'
         run: aws sts get-caller-identity
 
-      # The first step that touches AWS. -input=false is not optional in CI:
-      # without it a prompt hangs the job until the six hour timeout rather
-      # than failing.
-      - name: init
-        run: terraform -chdir=bootstrap init -input=false -lock-timeout=5m
-
-      # After init, because validate needs the provider schema on disk.
-      - name: validate
-        run: terraform -chdir=bootstrap validate
-
-      # No -out. A saved plan is state-adjacent — binary, derived, every
-      # attribute value in plaintext — and nothing in v0 applies it. The
-      # plan-file-as-artifact split belongs to v3-pipeline.
+      # THE PLAN. One loop over the discovered roots, two shapes of command.
       #
-      # No -detailed-exitcode. It exits 2 when changes are present, and a pull
-      # request proposing changes is the normal case, not a failure. That flag
-      # belongs to a scheduled drift check.
-      - name: plan
-        run: terraform -chdir=bootstrap plan -input=false -no-color -lock-timeout=5m
+      # It does not stop at the first failure, and that is the point of
+      # capturing the exit code rather than letting `set -e` take it. A
+      # reviewer opening a pull request that breaks two roots should see both,
+      # not the first one and a job that died. The job still fails — at the
+      # last step, after the comment exists.
+      #
+      # Still no -out. A saved plan is state-adjacent — binary, derived, every
+      # attribute value in plaintext — and nothing on a pull request applies
+      # it. apply.yml saves one because the reviewer's approval has to bind to
+      # exact bytes; here there is nothing to bind to.
+      #
+      # Still no -detailed-exitcode. It exits 2 when changes are present, and a
+      # pull request proposing changes is the normal case, not a failure. The
+      # per-root status line below comes from Terraform's own summary line
+      # instead, which has the second advantage of not depending on whether
+      # `terragrunt run --` propagates 2 faithfully — unverified, and not worth
+      # building a status column on.
+      - name: plan every root
+        if: steps.discover.outputs.count != '0'
+        env:
+          # account/ declares budget_alert_email with no default, and
+          # account.tfvars is gitignored because it holds a real address. So CI
+          # cannot read the value from the repository and must be given it.
+          # Empty here is not silent: the variable's own validation rejects it
+          # with "must be a single email address".
+          TF_VAR_budget_alert_email: ${{ secrets.BUDGET_ALERT_EMAIL }}
+        run: |
+          set -eu
+          work="$RUNNER_TEMP/plan"
+          mkdir -p "$work/plans"
+          : > "$work/status.tsv"
+          failed=0
+
+          # `run --` and not the `terragrunt init` shortcut. Terragrunt parses
+          # its own flags first, so a Terraform flag it does not recognise is
+          # an error about an unknown Terragrunt flag rather than a
+          # passthrough. The `--` ends Terragrunt's argument list.
+          #
+          # The cd is in a subshell so the loop's own working directory is
+          # untouched; Terragrunt has no -chdir, it reads the terragrunt.hcl of
+          # wherever it is.
+          # --tf-forward-stdout, and the first run of this job is what proved
+          # it necessary. Terragrunt does not pass Terraform's stdout through:
+          # it captures it, enriches it, and re-logs every line at its own
+          # STDOUT level, so a plan arrives looking like
+          #
+          #   10:09:19.809 STDOUT [live/dev/network] tofu: Plan: 12 to add, ...
+          #
+          # That is a log, not a plan. It broke the status column below, which
+          # anchors on Terraform's own summary line, and it put log furniture
+          # in front of every line of the plan the reviewer reads in the pull
+          # request comment. This flag turns the wrapping off for the wrapped
+          # tool only; Terragrunt's own messages are unaffected.
+          #
+          # It belongs to `run`, not to the global set, so it sits between the
+          # command and the `--` that ends Terragrunt's arguments. Placed
+          # before `run` it is rejected outright:
+          #
+          #   ERROR flag `--tf-forward-stdout` is not a valid global flag.
+          #         Did you mean to use `run --tf-forward-stdout`?
+          #
+          # Verified against v1.1.4 itself rather than against the
+          # documentation, which describes it in the global context.
+          #
+          # A flag rather than TG_TF_FORWARD_STDOUT in the env block: this one
+          # is worth seeing at the call site, and — as the error above shows —
+          # a wrong flag fails loudly where a wrong environment variable is
+          # ignored in silence.
+          run_init() {
+            case "$2" in
+              terragrunt) ( cd "$1" && terragrunt run --tf-forward-stdout -- init -input=false -lock-timeout=5m ) ;;
+              *)          terraform -chdir="$1" init -input=false -lock-timeout=5m ;;
+            esac
+          }
+          run_plan() {
+            case "$2" in
+              terragrunt) ( cd "$1" && terragrunt run --tf-forward-stdout -- plan -input=false -no-color -lock-timeout=5m ) ;;
+              *)          terraform -chdir="$1" plan -input=false -no-color -lock-timeout=5m ;;
+            esac
+          }
+
+          while read -r root kind; do
+            slug="$(echo "$root" | tr / -)"
+            out="$work/plans/$slug.txt"
+            echo "::group::plan $root"
+
+            # init and plan both land in $out, and the `>` on the second one
+            # truncates the first. So the file holds the plan when init
+            # succeeded and the init error when it did not — which is the only
+            # thing worth reading in either case. Both are echoed to the log
+            # below, so nothing is hidden.
+            rc=0
+            run_init "$root" "$kind" > "$out" 2>&1 || rc=$?
+            if [ "$rc" -eq 0 ]; then
+              run_plan "$root" "$kind" > "$out" 2>&1 || rc=$?
+            fi
+            cat "$out"
+            echo "::endgroup::"
+
+            # Unanchored, deliberately, even though the flag above should now
+            # put these lines at the start of their own. The anchor was the
+            # single point of failure that made a perfectly good plan report
+            # "unrecognised output", and anchoring again would rebuild it —
+            # any future Terragrunt that decorates a line differently breaks
+            # the status column and nothing else notices. The theoretical cost
+            # is a resource attribute containing the literal text "Plan: N to
+            # add"; the actual cost of the anchor has already been paid once.
+            if [ "$rc" -ne 0 ]; then
+              plan_status="**failed**"
+              failed=1
+            elif grep -q 'Plan: [0-9]* to add' "$out"; then
+              plan_status="$(grep 'Plan: [0-9]* to add' "$out" | tail -1 | sed 's/.*Plan: //; s/\.[[:space:]]*$//')"
+            elif grep -q 'Changes to Outputs:' "$out"; then
+              # Terraform prints "No changes." and then this when only an
+              # output moved. Reporting that as "no changes" would be wrong in
+              # the one direction that matters: an output is what the next
+              # stack reads through terraform_remote_state. Checked before
+              # "No changes." for that reason — both lines are present.
+              plan_status="outputs only"
+            elif grep -q 'No changes\.' "$out"; then
+              plan_status="no changes"
+            else
+              # Self-diagnosing, because the first version of this branch said
+              # "unrecognised output" and nothing else, and the whole cost of
+              # that failure was not knowing what the output actually was.
+              plan_status="**unrecognised output**"
+              failed=1
+              echo "::warning::$root: exit 0 but no recognisable plan summary. Last 20 lines:"
+              tail -20 "$out"
+            fi
+
+            printf '%s\t%s\t%s\n' "$root" "$slug" "$plan_status" >> "$work/status.tsv"
+          done < "$work/roots.txt"
+
+          echo "PLAN_FAILED=$failed" >> "$GITHUB_ENV"
+
+      # The run summary carries the full text, always, and the comment carries
+      # as much of it as fits. They are written from the same files, so they
+      # cannot disagree. GitHub caps this at 1 MiB and truncates in the UI; the
+      # job log below is the copy with no cap at all.
+      - name: render the plans into the run summary
+        if: always() && steps.discover.outputs.count != ''
+        run: |
+          set -eu
+          work="$RUNNER_TEMP/plan"
+          {
+            echo "## Terraform plan"
+            echo
+            if [ ! -s "$work/status.tsv" ]; then
+              echo "No plan ran."
+            else
+              while IFS="$(printf '\t')" read -r root slug plan_status; do
+                echo "### \`$root\` — $plan_status"
+                echo
+                echo '```terraform'
+                cat "$work/plans/$slug.txt"
+                echo '```'
+                echo
+              done < "$work/status.tsv"
+            fi
+            if [ -s "$work/deferred.txt" ]; then
+              echo "### Changed, validated, not planned"
+              echo
+              while read -r unit; do
+                echo "- \`$unit\`"
+              done < "$work/deferred.txt"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # THE COMMENT BODY. Assembled as a file rather than a shell variable:
+      # plan text contains backticks, dollar signs and newlines, and every one
+      # of those is a way for a variable to arrive at the API mangled.
+      #
+      # always(), because the most useful comment on a pull request that broke
+      # `fmt` is the one saying so. The guard on the discover output is what
+      # distinguishes "the gates failed" from "the job never got far enough to
+      # know anything" — with no discovery there is nothing honest to say.
+      - name: build the comment
+        if: always() && steps.discover.outputs.count != ''
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -eu
+          work="$RUNNER_TEMP/plan"
+          body="$work/comment.md"
+
+          {
+            echo "$COMMENT_MARKER"
+            echo "## Terraform plan"
+            echo
+          } > "$body"
+
+          if [ ! -s "$work/roots.txt" ] && [ ! -s "$work/deferred.txt" ]; then
+            echo "No Terraform, Terragrunt or module change in this pull request. Nothing to plan." >> "$body"
+          elif [ ! -s "$work/status.tsv" ] && [ -s "$work/roots.txt" ]; then
+            # Roots were in scope but no status was written, so the job died
+            # between discovery and the plan — fmt, validate, or the role.
+            echo "A gate above the plan failed, so no plan ran. See the [job log]($RUN_URL)." >> "$body"
+            echo >> "$body"
+          fi
+
+          if [ -s "$work/status.tsv" ] || [ -s "$work/deferred.txt" ]; then
+            {
+              echo "| Root | Result |"
+              echo "| --- | --- |"
+              if [ -s "$work/status.tsv" ]; then
+                while IFS="$(printf '\t')" read -r root slug plan_status; do
+                  echo "| \`$root\` | $plan_status |"
+                done < "$work/status.tsv"
+              fi
+              if [ -s "$work/deferred.txt" ]; then
+                while read -r unit; do
+                  echo "| \`$unit\` | changed · validated, not planned |"
+                done < "$work/deferred.txt"
+              fi
+              echo
+            } >> "$body"
+          fi
+
+          if [ -s "$work/status.tsv" ]; then
+            # The budget is split evenly rather than first-come, so one
+            # greenfield plan cannot consume the comment and push the others
+            # out. Integer division, so the sum is at or under the budget by
+            # construction.
+            planned="$(wc -l < "$work/status.tsv" | tr -d ' ')"
+            budget=$(( COMMENT_BUDGET / planned ))
+
+            while IFS="$(printf '\t')" read -r root slug plan_status; do
+              out="$work/plans/$slug.txt"
+              {
+                # Collapsed. A pull request touching four roots would otherwise
+                # open with several hundred lines the reviewer has to scroll
+                # past to reach the table.
+                echo "<details><summary><code>$root</code> — $plan_status</summary>"
+                echo
+                # Four backticks, not three. A rendered user_data or an IAM
+                # policy document in a plan can contain a fence of three, and
+                # one of those closes the block early and spills the rest of
+                # the plan into the comment as markdown.
+                echo '````terraform'
+                if [ "$(wc -c < "$out")" -gt "$budget" ]; then
+                  # sed '$d' drops the line head -c cut in half, which also
+                  # removes any partial UTF-8 sequence at the boundary.
+                  head -c "$budget" "$out" | sed '$d'
+                  echo
+                  echo "… truncated at $budget bytes. The full plan is in the run summary."
+                else
+                  cat "$out"
+                fi
+                echo '````'
+                echo
+                echo "</details>"
+                echo
+              } >> "$body"
+            done < "$work/status.tsv"
+          fi
+
+          {
+            echo "<sub>Commit \`$(echo "$HEAD_SHA" | cut -c1-7)\` · [run]($RUN_URL) · planned by \`linkforge-gha-plan\`, which holds ReadOnlyAccess and the state lock.</sub>"
+          } >> "$body"
+
+          echo "comment body: $(wc -c < "$body") bytes"
+
+      # Edited in place, not appended. A pull request gets a push per review
+      # comment addressed, and a fresh plan comment on each of them buries the
+      # current one under stale ones that all look authoritative. GitHub keeps
+      # the edit history on the comment, so nothing is lost by overwriting.
+      #
+      # gh rather than an action: it ships on the runner, so there is no fourth
+      # third-party SHA to pin and keep current, and the two calls below are
+      # the whole of what any of those actions would do.
+      - name: post the plan to the pull request
+        if: always() && steps.discover.outputs.count != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          MARKER: ${{ env.COMMENT_MARKER }}
+        run: |
+          set -eu
+          work="$RUNNER_TEMP/plan"
+
+          # env.MARKER inside the jq filter rather than interpolated by the
+          # shell: the marker is HTML and would need quoting twice otherwise.
+          # head -1 because a marker that somehow matched twice should update
+          # the older comment and leave one duplicate, not fail the step.
+          id="$(gh api "repos/$GH_REPO/issues/$PR/comments" --paginate \
+                  --jq '.[] | select(.body | startswith(env.MARKER)) | .id' | head -1)"
+
+          # -F body=@file, so the body never passes through a shell variable or
+          # an argument list. A plan is tens of kilobytes and would otherwise
+          # be one backtick away from being executed rather than sent.
+          if [ -n "$id" ]; then
+            gh api --method PATCH "repos/$GH_REPO/issues/comments/$id" -F body=@"$work/comment.md" > /dev/null
+            echo "updated comment $id"
+          else
+            gh api --method POST "repos/$GH_REPO/issues/$PR/comments" -F body=@"$work/comment.md" > /dev/null
+            echo "created a comment"
+          fi
+
+      # Last, and after the comment, so a pull request that breaks a root gets
+      # both the red check and the plan explaining it. The plan step swallows
+      # its own failures precisely so this one can report all of them at once.
+      - name: fail if any root failed to plan
+        if: steps.discover.outputs.count != '0'
+        run: |
+          set -eu
+          if [ "${PLAN_FAILED:-0}" -ne 0 ]; then
+            echo "at least one root failed to plan; see the comment on the pull request"
+            exit 1
+          fi
+          echo "every root planned"
