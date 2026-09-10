@@ -3,7 +3,7 @@
 | Tag | Outcome | Status |
 | --- | --- | --- |
 | `v0-bootstrap` | State, OIDC, IAM baseline, and budget | Complete, 2026-08-29 |
-| `v1-network` | Private network, SSM host, and ALB | In progress |
+| `v1-network` | Private network, SSM host, and ALB | Complete, 2026-09-11 |
 | `v2-fargate` | ECR, ECS service, logs, and auto scaling | Not started |
 | `v3-pipeline` | Automated releases and multi-stack deploys | Not started |
 | `v4-state` | DynamoDB-backed links and statistics | Not started |
@@ -26,7 +26,7 @@
 | 6 | Dev network apply and verification | Done |
 | 7 | Dev apply workflow | Done |
 | 8 | Terragrunt live layout | Done |
-| 9 | Nightly dev destroy | Implemented — awaiting first successful run |
+| 9 | Nightly dev destroy | Done |
 
 - `dev` is the only built environment; `stage` and `prod` are configuration only.
 - [.github/workflows/destroy.yml](.github/workflows/destroy.yml) destroys only
@@ -34,4 +34,4 @@
 - Modules composed by `stacks/network` are included automatically. A new
   `live/dev/<stack>` unit needs its own destroy step, after its dependants.
 
-`v1-network` completes when step 9 succeeds.
+`v1-network` closed on 2026-09-11 after the scheduled-destroy workflow ran successfully.
