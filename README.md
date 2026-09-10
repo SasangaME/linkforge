@@ -14,9 +14,13 @@ Three endpoints.
 
 That is about 150 lines of Python. It is boring on purpose. The application is never the subject of this project — the resource graph around it is.
 
-## When the application gets written
+## When the application runs
 
-`v2-fargate`. That is the first milestone with ECR and ECS, and a registry with no image to store and a scheduler with no task to run are not worth building. Before that, `v1-network` proves out private subnets and SSM access against a host that answers `/health` and nothing else.
+The small application stub is now committed in [`app/`](app/), ahead of its
+first deployment. `v2-fargate` is the first milestone with ECR and ECS, so it
+is where that image first becomes a running service. Before that,
+`v1-network` proved private subnets and SSM access against a host that answered
+`/health` and nothing else.
 
 The code then arrives in the order the infrastructure can support it:
 
@@ -29,9 +33,11 @@ The code then arrives in the order the infrastructure can support it:
 
 It stays a stub until `v4-state` for an honest reason: there is no store to write to, so `POST /links` cannot persist anything before then. And the `v6-events` change is the only one carrying real design weight — the redirect has to stay fast, so the click write comes off the request path and onto a queue.
 
-Building more application than the infrastructure can currently serve is exactly the failure mode this ordering exists to prevent.
+The stub deliberately goes no further than the infrastructure can serve: it
+defines the container interface without adding persistence, analytics, or a
+release pipeline before the milestones that provide them.
 
-The application is Python. The framework choice is deferred to `v2-fargate` and matters in four ways only: it must expose a `/health` route for the ALB target group, listen on the port the task definition declares, be async (the redirect blocks on DynamoDB, and a sync worker blocks everything else with it), and run as a single process per container so CPU stays a clean autoscaling signal. The container image is the real interface between the application and everything in this repository — nothing downstream of ECR knows or cares what is inside it, which is also what makes a later change of language cheap.
+The application is Python using FastAPI. It exposes `/health` for the ALB target group, listens on port 8080, uses async route handlers, and runs as a single process per container so CPU stays a clean autoscaling signal. The container image is the real interface between the application and everything in this repository — nothing downstream of ECR knows or cares what is inside it, which is also what makes a later change of language cheap.
 
 ### Where it lives, and why not in its own repository
 
@@ -45,7 +51,7 @@ linkforge/
 ├── live/root.hcl            what every unit derives: state key, tags, stack source
 ├── stacks/<stack>/          root modules. One per stack, shared by all environments
 ├── modules/                 resource graphs. No environment name appears in here
-├── app/                     the application. Arrives at v2-fargate
+├── app/                     the application source; first deployed at v2-fargate
 └── .github/workflows/       plan on every pull request; apply from v1-network step 7
 ```
 
@@ -79,7 +85,7 @@ See [ROADMAP.md](ROADMAP.md) for the milestone list and current status.
 
 ## What exists today
 
-`v0-bootstrap` closed on 2026-08-29 and `v1-network` is in progress. All nine steps are implemented; the scheduled destroy is awaiting its first successful run before the milestone closes. The network was built end to end on 2026-08-30: a host with no address and no key pair registered with Session Manager, and the load balancer's target group reported `healthy` with `/health` answering 200 from the public internet. The nightly teardown in [.github/workflows/destroy.yml](.github/workflows/destroy.yml) makes that ephemeral state a repository property rather than something someone must remember.
+`v0-bootstrap` closed on 2026-08-29 and `v1-network` closed on 2026-09-11 after its first scheduled destroy succeeded. The application stub for `v2-fargate` is committed; ECR, ECS, logs, auto scaling, and the first container deployment remain. The network was built end to end on 2026-08-30: a host with no address and no key pair registered with Session Manager, and the load balancer's target group reported `healthy` with `/health` answering 200 from the public internet. The nightly teardown in [.github/workflows/destroy.yml](.github/workflows/destroy.yml) makes that ephemeral state a repository property rather than something someone must remember.
 
 ### `v0-bootstrap`, closed
 
@@ -123,7 +129,7 @@ The lesson it closed on is worth carrying, because everything below is subject t
 
 A few operations have no Terraform resource and no API worth automating: enabling Cost Explorer, activating cost allocation tags, answering an SNS confirmation mail, handing the workflow its role ARN. Those live in [RUNBOOK.md](RUNBOOK.md), each with the reason for it, the moment to do it, and a check — because a manual step has no plan output to read.
 
-### `v1-network`, in progress
+### `v1-network`, closed
 
 [modules/](modules/) holds three module definitions and [live/](live/) holds three stacks that call them. `live/dev/network` has been applied by the pipeline and torn down again; `live/stage/network` and `live/prod/network` are checked by `terraform validate` on every pull request and have never been built.
 
