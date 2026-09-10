@@ -4,7 +4,7 @@
 | --- | --- | --- |
 | `v0-bootstrap` | State, OIDC, IAM baseline, and budget | Complete, 2026-08-29 |
 | `v1-network` | Private network, SSM host, and ALB | Complete, 2026-09-11 |
-| `v2-fargate` | ECR, ECS service, logs, and auto scaling | Not started |
+| `v2-fargate` | ECR, ECS service, logs, and auto scaling | In progress |
 | `v3-pipeline` | Automated releases and multi-stack deploys | Not started |
 | `v4-state` | DynamoDB-backed links and statistics | Not started |
 | `v5-observable` | Alarms, dashboards, tracing, and SNS | Not started |
@@ -35,3 +35,20 @@
   `live/dev/<stack>` unit needs its own destroy step, after its dependants.
 
 `v1-network` closed on 2026-09-11 after the scheduled-destroy workflow ran successfully.
+
+## `v2-fargate`
+
+| Step | Work | Status |
+| --- | --- | --- |
+| 1 | Python application stub, Dockerfile, and endpoint tests | Done |
+| 2 | ECR repository and task execution roles | Not started |
+| 3 | ECS cluster, task definition, service, and CloudWatch logs | Not started |
+| 4 | Replace the instance target with an IP target group for ECS | Not started |
+| 5 | Service auto scaling | Not started |
+| 6 | Build, push, deploy, and verify the dev image | Not started |
+| 7 | Add the v2 resources to the nightly dev destroy | Not started |
+
+The committed [`app/`](app/) stub exposes `/health` and fixed in-memory
+redirects on port 8080. It is deliberately stateless and has no release
+automation; those are the infrastructure work of this milestone and
+`v3-pipeline`, respectively.
