@@ -106,7 +106,7 @@ The table above changes at the end of a milestone only. Thus it holds no detail 
 | 6 | `live/dev/network`, applied. `live/stage/network` and `live/prod/network`, written and validated only | Done |
 | 7 | The first workflow that applies. It declares `environment: dev`, and it is what tests step 1 | Done |
 | 8 | The Terragrunt decision, once the same backend block stands in three directories | Done |
-| 9 | The scheduled destroy of `dev`. The environment becomes ephemeral by construction rather than by memory | Not started |
+| 9 | The scheduled destroy of `dev`. The environment becomes ephemeral by construction rather than by memory | Implemented — awaiting first successful run |
 
 Step 1 is the only step of this milestone that is not code. It is [RUNBOOK.md](RUNBOOK.md) operation 5, and it blocks every step after it: an apply role whose trust policy pins `:environment:dev` cannot be assumed until an environment of that name exists to put the claim in the token.
 
@@ -176,7 +176,7 @@ Step 6 is where the addressing fixed in `v0-bootstrap` is spent. `dev` is `10.0.
 
 Steps 6 and 7 also met a gap that nothing before them could have found. `linkforge-gha-apply-dev` held state access and the escalation deny and nothing else, so it could not create a VPC, a subnet, an endpoint, a security group or an instance — the first apply from CI would have failed on `ec2:CreateVpc`, before a single resource existed. That is the *grows per milestone* line in [RUNBOOK.md](RUNBOOK.md) coming due for the first time, and it was a hand-applied change to `account/` for the same reason everything there is: a role that can write its own permissions makes the scoping decorative.
 
-The permissions this milestone needs are the EC2 network surface, the `elasticloadbalancing` actions that step 5 added to it, plus `iam:PassRole` scoped to `linkforge-ssm-host` alone — a host cannot be given a profile the applying role may not pass, and an unscoped `PassRole` hands the pipeline every role in the account. It is also the first permission set that has to allow deletes, because step 9 destroys `dev` nightly with the same role.
+The permissions this milestone needs are the EC2 network surface, the `elasticloadbalancing` actions that step 5 added to it, plus `iam:PassRole` scoped to `linkforge-ssm-host` alone — a host cannot be given a profile the applying role may not pass, and an unscoped `PassRole` hands the pipeline every role in the account. It is also the first permission set that has to allow deletes, because step 9's scheduled workflow destroys `dev` nightly with the same role.
 
 One item in it could not be granted at all. Elastic Load Balancing creates `AWSServiceRoleForElasticLoadBalancing` on the first `CreateLoadBalancer` in an account and bills the caller `iam:CreateServiceLinkedRole` for it — an action the escalation guardrail denies on `*`, and an explicit deny is terminal rather than weighed. So no policy added to an apply role could have made its first load balancer succeed. The role is created once in `account/`, declared rather than acquired as a side effect, which also fixes the ordering: an admin who applies a load balancer first creates it implicitly and the Terraform resource then fails as already taken.
 
@@ -207,7 +207,7 @@ What it costs is worth stating. A binary that is now on the apply path, pinned b
 
 The layout is [stacks/network](stacks/network/) for the code, [live/root.hcl](live/root.hcl) for what is generated, and one `terragrunt.hcl` per environment holding arguments and nothing else.
 
-Step 9 makes the daily destroy a property of the repository rather than a habit. Every cost in this milestone is hourly, so `dev` is cheap when it is short-lived and the only thing keeping it short-lived today is memory. A scheduled workflow that destroys `live/dev/network` overnight turns a forgotten environment into one evening rather than one month, and returns the $10 budget alarm to being a backstop instead of the primary control.
+Step 9 makes the daily destroy a property of the repository rather than a habit. The scheduled workflow in [.github/workflows/destroy.yml](.github/workflows/destroy.yml) destroys `live/dev/network` at midnight Asia/Colombo (18:30 UTC), and a manual trigger exists to verify the path before relying on its first scheduled run. Every cost in this milestone is hourly, so `dev` is cheap when it is short-lived; the workflow turns a forgotten environment into one evening rather than one month and returns the $10 budget alarm to being a backstop instead of the primary control.
 
 It comes after step 7 because it needs the same apply role and the same `environment: dev` declaration, and it is the second job to prove that path. Two things about it are worth deciding rather than discovering: a schedule reaches AWS with nobody watching, so the destroy is scoped to the one stack by path and never runs `-auto-approve` against anything under `live/stage` or `live/prod`; and `stage` and `prod` are safe from it for the same reason they are unbuilt, which is that no environment exists to mint them a token.
 

@@ -36,9 +36,10 @@ resolve at all.
 `dev` is not standing. It was built end to end by the pipeline on 2026-08-30,
 verified, and destroyed the same evening; the state file is still there with a
 lineage and a serial and no resources in it. That is the intended steady state
-until step 9 makes the teardown automatic — every cost in this milestone is
-hourly, so the number that decides the bill is how many hours the environment
-existed, and nothing in any `.tf` file decides that.
+until step 9 made the teardown automatic. [.github/workflows/destroy.yml](../.github/workflows/destroy.yml)
+now destroys `live/dev/network` nightly at midnight Asia/Colombo; every cost in
+this milestone is hourly, so the number that decides the bill is how many hours
+the environment existed, and nothing in any `.tf` file decides that.
 
 An empty state file is not the same as no state file, and the difference
 matters on the next apply: the lineage is what lets Terraform recognise the
@@ -174,10 +175,10 @@ the single zone is not money: a fault in that zone costs dev its SSM access
 entirely, which is the right trade in an environment rebuilt daily and the wrong
 one anywhere else.
 
-Dev is still destroyed at the end of the day. About $38 a month is well above
-the budget, and the load balancer alone would be. What the correction changed is
-the size of the number, not the habit — and because the habit is the control,
-`v1-network` step 9 stops leaving it to memory. At about five cents an hour, a
+Dev is destroyed at the end of the day by the scheduled workflow. About $38 a
+month is well above the budget, and the load balancer alone would be. What the
+correction changed is the size of the number, not the control — `v1-network`
+step 9 now makes that control automatic. At about five cents an hour, a
 two-hour session is ten cents and a forgotten month is $38; the whole difference
 is hours, and nothing in Terraform decides those.
 

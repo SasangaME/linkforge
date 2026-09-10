@@ -79,7 +79,7 @@ See [ROADMAP.md](ROADMAP.md) for the milestone list and current status.
 
 ## What exists today
 
-`v0-bootstrap` closed on 2026-08-29 and `v1-network` is in progress, eight of its nine steps done. The network has now been built: on 2026-08-30 the pipeline applied `live/dev/network` end to end, a host with no address and no key pair registered with Session Manager, and the load balancer's target group reported `healthy` with `/health` answering 200 from the public internet. Then it was destroyed, which is the intended steady state — every cost in this milestone is hourly, and step 9 is what stops the teardown depending on someone remembering.
+`v0-bootstrap` closed on 2026-08-29 and `v1-network` is in progress. All nine steps are implemented; the scheduled destroy is awaiting its first successful run before the milestone closes. The network was built end to end on 2026-08-30: a host with no address and no key pair registered with Session Manager, and the load balancer's target group reported `healthy` with `/health` answering 200 from the public internet. The nightly teardown in [.github/workflows/destroy.yml](.github/workflows/destroy.yml) makes that ephemeral state a repository property rather than something someone must remember.
 
 ### `v0-bootstrap`, closed
 
@@ -153,7 +153,7 @@ The role and instance profile that host assumes are in [account/](account/) and 
 
 The one thing that module refuses to decide is who may reach it. `allowed_cidrs` has no default, in the same way the network module rejects the combination of no NAT gateway and no endpoints: the argument that decides what the public internet can open a connection to is stated by the stack, not guessed by the module.
 
-What remains is the stacks that call these modules, the first workflow that applies rather than plans, and a scheduled destroy. The last of those is not polish. Every cost in this milestone is hourly, so `dev` is cheap when it is short-lived, and the only thing keeping it short-lived today is memory: about six cents an hour is ten cents for an evening's work and $38 for an environment forgotten for a month. The number that decides the bill is not in any `.tf` file, which is the argument for making the destroy a property of the repository rather than a habit.
+The scheduled destroy is now in [.github/workflows/destroy.yml](.github/workflows/destroy.yml). It targets only `live/dev/network`, shares that unit's apply concurrency group, plans the destroy before applying it, and runs nightly at midnight Asia/Colombo. Every cost in this milestone is hourly, so `dev` is cheap when it is short-lived: about six cents an hour is ten cents for an evening's work and $38 for an environment forgotten for a month. The number that decides the bill is not in any `.tf` file, which is why the teardown belongs in the repository rather than in memory.
 
 One gap this milestone will meet and nothing before it could have found: `linkforge-gha-apply-dev` holds state access and the escalation deny and nothing else, so it cannot create a VPC, a subnet, a security group, an instance or a load balancer. The first apply from CI fails at `ec2:CreateVpc` before a single resource exists, and would fail again on `elasticloadbalancing:CreateLoadBalancer` after that. That is the *permissions grow per milestone* design arriving for the first time, and it is a hand-applied change to `account/` for the same reason everything there is.
 
