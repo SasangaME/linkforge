@@ -16,11 +16,11 @@ That is about 150 lines of Python. It is boring on purpose. The application is n
 
 ## When the application runs
 
-The small application stub is now committed in [`app/`](app/), ahead of its
-first deployment. `v2-fargate` is the first milestone with ECR and ECS, so it
-is where that image first becomes a running service. Before that,
-`v1-network` proved private subnets and SSM access against a host that answered
-`/health` and nothing else.
+The small application stub is committed in [`app/`](app/), ahead of its first
+deployment. `v2-fargate` is the first milestone with ECR and ECS, so it is
+where that image becomes a running service. Before that, `v1-network` proved
+private subnets and SSM access against a host that answered `/health` and
+nothing else.
 
 The code then arrives in the order the infrastructure can support it:
 
@@ -85,7 +85,7 @@ See [ROADMAP.md](ROADMAP.md) for the milestone list and current status.
 
 ## What exists today
 
-`v0-bootstrap` closed on 2026-08-29 and `v1-network` closed on 2026-09-11 after its first scheduled destroy succeeded. The application stub for `v2-fargate` is committed; ECR, ECS, logs, auto scaling, and the first container deployment remain. The network was built end to end on 2026-08-30: a host with no address and no key pair registered with Session Manager, and the load balancer's target group reported `healthy` with `/health` answering 200 from the public internet. The nightly teardown in [.github/workflows/destroy.yml](.github/workflows/destroy.yml) makes that ephemeral state a repository property rather than something someone must remember.
+`v0-bootstrap` closed on 2026-08-29 and `v1-network` closed on 2026-09-11 after its first scheduled destroy succeeded. `v2-fargate` is in progress: the application stub and its account IAM foundation are committed, while ECR, ECS, logs, auto scaling, and the first container deployment remain. The network was built end to end on 2026-08-30: a host with no address and no key pair registered with Session Manager, and the load balancer's target group reported `healthy` with `/health` answering 200 from the public internet. The nightly teardown in [.github/workflows/destroy.yml](.github/workflows/destroy.yml) makes that ephemeral state a repository property rather than something someone must remember.
 
 ### `v0-bootstrap`, closed
 

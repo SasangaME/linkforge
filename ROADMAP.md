@@ -41,14 +41,15 @@
 | Step | Work | Status |
 | --- | --- | --- |
 | 1 | Python application stub, Dockerfile, and endpoint tests | Done |
-| 2 | ECR repository and task execution roles | Not started |
-| 3 | ECS cluster, task definition, service, and CloudWatch logs | Not started |
-| 4 | Replace the instance target with an IP target group for ECS | Not started |
-| 5 | Service auto scaling | Not started |
-| 6 | Build, push, deploy, and verify the dev image | Not started |
-| 7 | Add the v2 resources to the nightly dev destroy | Not started |
+| 2 | ECS task roles, autoscaling service-linked role, and CI provisioning permissions | Implemented; awaiting manual `account/` apply |
+| 3 | ECR repository | Not started |
+| 4 | ECS cluster, task definition, service, and CloudWatch logs | Not started |
+| 5 | Replace the instance target with an IP target group for ECS | Not started |
+| 6 | Service auto scaling | Not started |
+| 7 | Build, push, deploy, and verify the dev image | Not started |
+| 8 | Add the v2 resources to the nightly dev destroy | Not started |
 
 The committed [`app/`](app/) stub exposes `/health` and fixed in-memory
 redirects on port 8080. It is deliberately stateless and has no release
-automation; those are the infrastructure work of this milestone and
-`v3-pipeline`, respectively.
+automation; persistent links arrive at `v4-state` and automated builds at
+`v3-pipeline`.
