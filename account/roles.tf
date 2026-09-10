@@ -370,6 +370,100 @@ data "aws_iam_policy_document" "provisioning" {
     actions   = ["ssm:GetParameter", "ssm:GetParameters"]
     resources = ["arn:aws:ssm:*::parameter/aws/service/ami-amazon-linux-latest/*"]
   }
+
+  statement {
+    sid = "ECRProvisioning"
+
+    actions = [
+      "ecr:CreateRepository",
+      "ecr:DeleteRepository",
+      "ecr:DescribeRepositories",
+      "ecr:DeleteLifecyclePolicy",
+      "ecr:GetLifecyclePolicy",
+      "ecr:PutImageScanningConfiguration",
+      "ecr:PutImageTagMutability",
+      "ecr:PutLifecyclePolicy",
+      "ecr:ListTagsForResource",
+      "ecr:TagResource",
+      "ecr:UntagResource",
+    ]
+
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "ECSProvisioning"
+
+    actions = [
+      "ecs:CreateCluster",
+      "ecs:DeleteCluster",
+      "ecs:DescribeClusters",
+      "ecs:CreateService",
+      "ecs:DeleteService",
+      "ecs:DescribeServices",
+      "ecs:UpdateService",
+      "ecs:RegisterTaskDefinition",
+      "ecs:DeregisterTaskDefinition",
+      "ecs:DescribeTaskDefinition",
+      "ecs:ListTagsForResource",
+      "ecs:TagResource",
+      "ecs:UntagResource",
+    ]
+
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "LogGroupProvisioning"
+
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:DeleteLogGroup",
+      "logs:DescribeLogGroups",
+      "logs:DeleteRetentionPolicy",
+      "logs:PutRetentionPolicy",
+      "logs:ListTagsForResource",
+      "logs:TagResource",
+      "logs:UntagResource",
+    ]
+
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "ServiceAutoscalingProvisioning"
+
+    actions = [
+      "application-autoscaling:RegisterScalableTarget",
+      "application-autoscaling:DeregisterScalableTarget",
+      "application-autoscaling:DescribeScalableTargets",
+      "application-autoscaling:PutScalingPolicy",
+      "application-autoscaling:DeleteScalingPolicy",
+      "application-autoscaling:DescribeScalingPolicies",
+      "application-autoscaling:DescribeScalingActivities",
+    ]
+
+    resources = ["*"]
+  }
+
+  # RegisterTaskDefinition is the only operation here that can give a workload
+  # AWS permissions. Restrict it to the two roles created in account/.
+  statement {
+    sid     = "PassOnlyLinkForgeECSRoles"
+    effect  = "Allow"
+    actions = ["iam:PassRole"]
+
+    resources = concat(
+      [for role in aws_iam_role.ecs_task_execution : role.arn],
+      [for role in aws_iam_role.ecs_task : role.arn],
+    )
+
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["ecs-tasks.amazonaws.com"]
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "gha_apply_provisioning" {
@@ -379,3 +473,6 @@ resource "aws_iam_role_policy" "gha_apply_provisioning" {
   role   = aws_iam_role.gha_apply[each.key].id
   policy = data.aws_iam_policy_document.provisioning.json
 }
+
+
+

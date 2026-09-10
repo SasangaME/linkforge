@@ -14,10 +14,11 @@
 # an IAM role standing idle costs nothing, and a profile that outlives the
 # instance is one less thing the scheduled destroy has to get right.
 #
-# This stops scaling at v2-fargate, when a task role and an execution role
-# arrive per environment. The answer then is to narrow the guardrail to an IAM
-# path — allow writes under /linkforge/service/ with a required permissions
-# boundary, deny everywhere else — not to keep adding roles here.
+# v2-fargate adds its ECS execution and task roles here for the same reason:
+# the CI guardrail prevents a stack from creating identities. The project has
+# only those two workload identities today. If later milestones need many more,
+# move identity creation behind an IAM path and permissions boundary rather than
+# making account/ an unbounded collection of service roles.
 
 data "aws_iam_policy_document" "ec2_assume" {
   statement {
@@ -92,4 +93,64 @@ resource "aws_iam_service_linked_role" "elasticloadbalancing" {
   aws_service_name = "elasticloadbalancing.amazonaws.com"
 
   tags = { Milestone = "v1-network" }
+}
+
+# Application Auto Scaling normally creates this role while registering the
+# first ECS scalable target. The CI guardrail denies iam:Create*, so account/
+# creates it first under an administrator identity.
+resource "aws_iam_service_linked_role" "ecs_application_autoscaling" {
+  aws_service_name = "ecs.application-autoscaling.amazonaws.com"
+
+  tags = { Milestone = "v2-fargate" }
+}
+
+# --- ECS task execution roles -------------------------------------------
+
+data "aws_iam_policy_document" "ecs_tasks_assume" {
+  statement {
+    sid     = "ECSTasksAssumeRole"
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["ecs-tasks.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "ecs_task_execution" {
+  for_each = toset(var.environments)
+
+  name               = "linkforge-ecs-task-execution-${each.key}"
+  description        = "Used by ECS to pull the LinkForge image and write container logs for ${each.key}."
+  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
+
+  tags = {
+    Environment = each.key
+    Milestone   = "v2-fargate"
+  }
+}
+
+# AWS maintains the exact ECR pull and CloudWatch Logs permissions ECS needs.
+# Do not duplicate it as an inline policy: changes to the execution contract
+# should arrive from AWS with the managed policy.
+resource "aws_iam_role_policy_attachment" "ecs_task_execution" {
+  for_each = aws_iam_role.ecs_task_execution
+
+  role       = each.value.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+resource "aws_iam_role" "ecs_task" {
+  for_each = toset(var.environments)
+
+  name               = "linkforge-ecs-task-${each.key}"
+  description        = "Application identity for LinkForge ECS tasks in ${each.key}. It has no permissions until v4-state."
+  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
+
+  tags = {
+    Environment = each.key
+    Milestone   = "v2-fargate"
+  }
 }
