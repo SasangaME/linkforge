@@ -14,6 +14,30 @@
 | `v9-govern` | Multi-account governance and cost control | Not started |
 | `v10-resilient` | Backup, disaster recovery, and review | Not started |
 
+## `v0-bootstrap`
+
+| Step | Work | Status |
+| --- | --- | --- |
+| 1 | Repository safety rails, including `.gitignore` | Done |
+| 2 | `bootstrap` module and S3 state bucket, initially using local state | Done |
+| 3 | Remote backend configuration and state migration | Done |
+| 4 | GitHub OIDC provider with plan and apply roles | Done |
+| 5 | Budget, SNS topic, and email subscription | Done |
+| 6 | Account baseline: public access block, EBS encryption, password policy | Done |
+| 7 | Pull-request workflow: `fmt`, `validate`, and `plan` | Done |
+| 8 | `dev`, `stage`, and `prod` configuration, with dev applied first | Done |
+
+- Steps 1–3 establish the remote state backend used by every later milestone.
+- Steps 4 and 7 are one end-to-end test: the roles are created, then a pull
+  request proves they can plan against S3 without long-lived access keys.
+- The environment split happens here because VPC CIDRs and module interfaces
+  are cheap to settle before networking exists, but expensive to change after.
+- Manual setup is recorded in [RUNBOOK.md](RUNBOOK.md): Cost Explorer, cost
+  allocation tags, the budget subscription, the plan-role repository variable,
+  and the hand-applied account module are complete.
+- GitHub Environments belong to `v1-network`, since this milestone does not
+  apply an environment-specific stack.
+
 ## `v1-network`
 
 | Step | Work | Status |
