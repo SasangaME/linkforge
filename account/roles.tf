@@ -375,11 +375,13 @@ data "aws_iam_policy_document" "provisioning" {
     sid = "ECRProvisioning"
 
     actions = [
+      "ecr:BatchDeleteImage",
       "ecr:CreateRepository",
       "ecr:DeleteRepository",
       "ecr:DescribeRepositories",
       "ecr:DeleteLifecyclePolicy",
       "ecr:GetLifecyclePolicy",
+      "ecr:ListImages",
       "ecr:PutImageScanningConfiguration",
       "ecr:PutImageTagMutability",
       "ecr:PutLifecyclePolicy",
@@ -473,6 +475,5 @@ resource "aws_iam_role_policy" "gha_apply_provisioning" {
   role   = aws_iam_role.gha_apply[each.key].id
   policy = data.aws_iam_policy_document.provisioning.json
 }
-
 
 
