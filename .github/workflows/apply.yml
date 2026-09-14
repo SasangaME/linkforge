@@ -54,7 +54,15 @@ on:
       - 'live/dev/network/**'
       - 'live/root.hcl'
       - 'stacks/network/**'
-      - 'modules/**'
+      # Enumerated rather than `modules/**`, and that stopped being pedantry at
+      # v2-fargate. modules/ecr is called from account/, which this workflow
+      # never applies — so a broad glob turned an ECR edit into a no-op
+      # live/dev/network apply parked in front of the reviewer gate. The cost
+      # of the glob is a human's attention, which is the one thing here that
+      # does not scale.
+      - 'modules/network/**'
+      - 'modules/ssm-host/**'
+      - 'modules/alb/**'
 
 # Same reasoning as plan.yml: queue, do not cancel. There is a second reason
 # here. A run waiting on the reviewer holds this group, so pushing twice queues
