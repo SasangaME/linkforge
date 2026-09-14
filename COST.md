@@ -57,7 +57,7 @@ The next table gives approximate values. These values are not exact prices. When
 | --- | --- | --- | --- | --- |
 | `v0-bootstrap` | S3 state, OIDC, budgets | About $0 | About $0 | The state objects are very small. OIDC and the budget alerts are free |
 | `v1-network` | Interface endpoints, ALB | About $38 | $0 | The value is for `dev`, the only environment that is built. All costs are hourly. Thus the destroy operation removes all of them |
-| `v2-fargate` | Fargate tasks, ECR, logs | About $15 | Low | The ECR images and the logs remain. Give the log group a retention period |
+| `v2-fargate` | Fargate tasks, ECR, logs | About $15 | Low | The ECR images and the logs remain. Give the log group a retention period. Until step 7 only untagged images expire, so every build that is pushed is kept and this number grows with the build count |
 | `v3-pipeline` | GitHub Actions | About $0 | $0 | Free for a public repository. You do not pay for this compute |
 | `v4-state` | KMS, Secrets Manager | Low | **Yes** | You pay for each key and each secret every month, even when nothing operates |
 | `v5-observable` | Alarms, dashboards | Low | **Yes** | You pay for each alarm and each dashboard every month. The quantity increases quickly |

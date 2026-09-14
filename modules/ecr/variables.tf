@@ -3,8 +3,8 @@ variable "repository_name" {
   type        = string
 }
 
-variable "force_delete" {
-  description = "Whether Terraform may delete images before deleting the repository."
-  type        = bool
-  default     = false
+variable "tags" {
+  description = "Additional tags for the repository."
+  type        = map(string)
+  default     = {}
 }

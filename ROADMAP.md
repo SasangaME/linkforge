@@ -66,14 +66,19 @@
 | --- | --- | --- |
 | 1 | Python application stub, Dockerfile, and endpoint tests | Done |
 | 2 | ECS task roles, autoscaling service-linked role, and CI provisioning permissions | Done |
-| 3 | ECR repository | Not started |
+| 3 | Shared ECR repository and lifecycle policy | Implemented; awaiting manual `account/` apply |
 | 4 | ECS cluster, task definition, service, and CloudWatch logs | Not started |
 | 5 | Replace the instance target with an IP target group for ECS | Not started |
 | 6 | Service auto scaling | Not started |
-| 7 | Build, push, deploy, and verify the dev image | Not started |
-| 8 | Add the v2 resources to the nightly dev destroy | Not started |
+| 7 | Build, push, deploy, and verify the dev image, and bound tagged-image retention | Not started |
+| 8 | Add the ephemeral v2 resources to the nightly dev destroy | Not started |
 
 The committed [`app/`](app/) stub exposes `/health` and fixed in-memory
 redirects on port 8080. It is deliberately stateless and has no release
 automation; persistent links arrive at `v4-state` and automated builds at
 `v3-pipeline`.
+
+The ECR repository is shared by all environments, owned by `account/`, and not
+part of nightly dev teardown. Images are built once and promoted by digest.
+Only untagged images expire until step 7 defines tags that protect every digest
+still referenced by an environment.

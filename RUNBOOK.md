@@ -13,8 +13,9 @@ An operation in this file has three parts: the reason for it, the correct time t
 | Confirm the budget alert subscription | `v0-bootstrap` | Done, 2026-08-29 |
 | Set the plan role repository variable | `v0-bootstrap` | Done, 2026-08-29 |
 | Create the GitHub Environments | `v1-network` | `dev` done, 2026-08-29. `stage` and `prod` on promotion |
-| Apply the `account` module by hand | `v0-bootstrap` onward | Done, 2026-08-29 |
+| Apply the `account` module by hand | `v0-bootstrap` onward | Done, 2026-08-29. Re-apply pending for the shared ECR repository |
 | Apply `stage` or `prod` from the Actions UI | `v1-network` | Not started. Blocked on the apply workflow, step 7 |
+| Remove the shared ECR repository | `v2-fargate` onward | Not started. Only on retirement |
 
 ## The correct sequence
 
@@ -434,6 +435,49 @@ Branch "main" is not allowed to deploy to prod due to environment protection rul
 That is a different failure from operation 5's `Not authorized to perform
 sts:AssumeRoleWithWebIdentity`, and the difference tells you which layer rejected the
 run — GitHub before the token, or IAM after it.
+
+## Operation 8: Remove the shared ECR repository
+
+**Reason.** The repository is intentionally not force-deleted. Once it contains
+an image, removing its Terraform resource fails with `RepositoryNotEmptyException`
+instead of silently deleting an artifact that stage or prod may still need. The
+apply roles cannot delete images; this teardown requires the administrator who
+applies `account/` by hand.
+
+**When.** Only when retiring LinkForge or deliberately replacing its shared
+repository. Never as part of nightly dev teardown.
+
+**Steps.**
+
+1. Confirm no ECS service or task definition in any environment references an
+   image digest in the repository.
+2. List the remaining image digests:
+
+   ```bash
+   export AWS_PROFILE=dev
+   aws ecr list-images --repository-name linkforge
+   ```
+
+3. Delete those digests explicitly as the administrator, keeping the output as
+   the record of what was removed. Batches are capped at 100 digests, so a long
+   list is several calls:
+
+   ```bash
+   aws ecr batch-delete-image --repository-name linkforge \
+     --image-ids imageDigest=sha256:... imageDigest=sha256:...
+   ```
+
+4. Delete `account/ecr.tf` **and** the three `ecr_*` outputs at the end of
+   `account/outputs.tf`, then apply `account/` as in operation 6.
+
+   Both halves, and in one change. Those outputs reference `module.ecr`, so
+   removing only the module call fails at `validate` with `Reference to
+   undeclared module` three times over and produces no plan at all — which is
+   a confusing thing to meet in the middle of a decommission. The now-empty
+   repository and its lifecycle policy are deleted.
+
+**Check.** `aws ecr describe-repositories --repository-names linkforge` returns
+`RepositoryNotFoundException`.
 
 ## A note for `v9-govern`
 

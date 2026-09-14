@@ -24,3 +24,18 @@ output "ssm_host_instance_profile_name" {
   description = "Instance profile named by the EC2 host in live/<env>/network."
   value       = aws_iam_instance_profile.ssm_host.name
 }
+
+output "ecr_repository_url" {
+  description = "Shared image repository used by every LinkForge environment."
+  value       = module.ecr.repository_url
+}
+
+output "ecr_repository_arn" {
+  description = "Shared repository ARN used when image pipeline permissions are added."
+  value       = module.ecr.repository_arn
+}
+
+output "ecr_registry_id" {
+  description = "Registry ID used to authenticate image build and release tooling."
+  value       = module.ecr.registry_id
+}

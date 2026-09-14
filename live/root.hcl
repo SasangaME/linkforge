@@ -29,11 +29,19 @@ locals {
 
   account_id = "749000381089"
   region     = "us-east-1"
-  milestones = {
-    network = "v1-network"
-    ecr     = "v2-fargate"
-  }
-  milestone = local.milestones[local.stack]
+
+  # The only value in this block that is NOT derived from the unit path, and so
+  # the only one that can be wrong without anything failing. It is correct while
+  # every unit under live/ belongs to v1-network. Step 4 of v2-fargate adds an
+  # ECS unit beside the network ones, and on that day one literal cannot serve
+  # two milestones: this becomes a map keyed on local.stack, exactly like the
+  # state key and the Environment tag above it.
+  #
+  # Written down rather than fixed now because a map of one entry is harder to
+  # read than a string and proves nothing. What it would cost to miss is a
+  # Milestone tag that attributes v2 spend to v1 in the cost report — wrong in
+  # the one artefact nobody diffs.
+  milestone = "v1-network"
 }
 
 # The source is derived from the directory too: live/<env>/network runs
