@@ -65,7 +65,7 @@
 | Step | Work | Status |
 | --- | --- | --- |
 | 1 | Python application stub, Dockerfile, and endpoint tests | Done |
-| 2 | ECS task roles, autoscaling service-linked role, and CI provisioning permissions | Implemented; awaiting manual `account/` apply |
+| 2 | ECS task roles, autoscaling service-linked role, and CI provisioning permissions | Done |
 | 3 | ECR repository | Not started |
 | 4 | ECS cluster, task definition, service, and CloudWatch logs | Not started |
 | 5 | Replace the instance target with an IP target group for ECS | Not started |

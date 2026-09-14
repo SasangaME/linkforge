@@ -20,7 +20,8 @@ when the supporting infrastructure exists.
   and a cost budget.
 - `v1-network` — complete: VPC, private access through SSM, and an application
   load balancer.
-- `v2-fargate` — in progress: ECR, ECS Fargate, logs, and autoscaling.
+- `v2-fargate` — in progress: IAM roles are ready; ECR, ECS Fargate, logs, and
+  autoscaling remain.
 - Next step: add the ECR repository.
 
 The full plan is in [ROADMAP.md](ROADMAP.md).
