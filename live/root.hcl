@@ -29,7 +29,11 @@ locals {
 
   account_id = "749000381089"
   region     = "us-east-1"
-  milestone  = "v1-network"
+  milestones = {
+    network = "v1-network"
+    ecr     = "v2-fargate"
+  }
+  milestone = local.milestones[local.stack]
 }
 
 # The source is derived from the directory too: live/<env>/network runs
