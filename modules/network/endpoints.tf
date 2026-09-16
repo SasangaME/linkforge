@@ -17,10 +17,33 @@ resource "aws_security_group" "endpoints" {
 }
 
 locals {
-  # Empty in dev, where interface_endpoint_az_count is 0. An interface endpoint
-  # with no subnets is an API error, not an endpoint that does nothing, so the
-  # count has to switch the resource off rather than just narrow the slice.
-  interface_endpoints = var.interface_endpoint_az_count > 0 ? toset(["ssm", "ssmmessages", "ec2messages"]) : toset([])
+  # Empty in an environment with a NAT gateway, where interface_endpoint_az_count
+  # is 0. An interface endpoint with no subnets is an API error, not an endpoint
+  # that does nothing, so the count has to switch the resource off rather than
+  # narrow the slice.
+  #
+  # Six services, and the last three arrived with v2-fargate rather than being
+  # overlooked at v1. A Fargate task pulls its image over the task ENI, so
+  # ecr.api authorises the pull, ecr.dkr serves the manifest, the S3 gateway
+  # endpoint below carries the layers, and logs takes the awslogs driver's
+  # output. Miss any one and the service applies cleanly while every task dies
+  # in PENDING.
+  #
+  # What it costs, stated because README.md has been wrong about this number
+  # once already. An interface endpoint is billed per zone, so dev goes from
+  # about $22 a month standing to about $44 — more than the $33 NAT gateway
+  # the endpoints exist to avoid. The standing figure is not what decides it.
+  # dev is destroyed nightly, so the bill follows hours: at three hours a day
+  # six endpoints is $5.40 a month against a gateway's $4.05. A dollar is what
+  # a private tier with no route to the internet costs here.
+  interface_endpoints = var.interface_endpoint_az_count > 0 ? toset([
+    "ssm",
+    "ssmmessages",
+    "ec2messages",
+    "ecr.api",
+    "ecr.dkr",
+    "logs",
+  ]) : toset([])
 }
 
 resource "aws_vpc_endpoint" "interface" {

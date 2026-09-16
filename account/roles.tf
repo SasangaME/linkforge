@@ -388,9 +388,24 @@ data "aws_iam_policy_document" "provisioning" {
       "ecs:ListTagsForResource",
       "ecs:TagResource",
       "ecs:UntagResource",
+      "ecs:PutClusterCapacityProviders",
+      "ecs:UpdateClusterSettings",
     ]
 
     resources = ["*"]
+  }
+
+  # What stacks/app's data source calls to turn a repository name into a
+  # registry URL, for the same reason the instance profile is looked up by name
+  # rather than read out of another state file. Scoped to the one repository and
+  # read-only: no environment may change the shared artifact store. The plan
+  # role already reaches it through ReadOnlyAccess, so this is the apply path
+  # alone.
+  statement {
+    sid       = "ReadTheSharedRepository"
+    effect    = "Allow"
+    actions   = ["ecr:DescribeRepositories"]
+    resources = [module.ecr.repository_arn]
   }
 
   statement {

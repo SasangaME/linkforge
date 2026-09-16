@@ -95,6 +95,26 @@ resource "aws_iam_service_linked_role" "elasticloadbalancing" {
   tags = { Milestone = "v1-network" }
 }
 
+# The one that is easy to miss, because nothing in the ECS stack names it. AWS
+# creates AWSServiceRoleForECS on the first CreateCluster or CreateService in
+# an account and bills the caller `iam:CreateServiceLinkedRole` for it. The
+# no_escalation guardrail denies `iam:Create*` on `*`, and an explicit Deny is
+# terminal — the same wall in the same place as elasticloadbalancing above,
+# found the same way.
+#
+# ORDERING, identically. Apply this before creating any cluster or service by
+# hand. devops-admin has the permission the pipeline lacks, so a hand-made
+# cluster creates the role as a side effect and this then fails with
+# `InvalidInput: Service role name AWSServiceRoleForECS has been taken in this
+# account`. Recoverable with `terraform import`, and cheaper not to need. If
+# the account has ever touched ECS in the console, expect exactly that error on
+# the first apply.
+resource "aws_iam_service_linked_role" "ecs" {
+  aws_service_name = "ecs.amazonaws.com"
+
+  tags = { Milestone = "v2-fargate" }
+}
+
 # Application Auto Scaling normally creates this role while registering the
 # first ECS scalable target. The CI guardrail denies iam:Create*, so account/
 # creates it first under an administrator identity.
@@ -146,11 +166,45 @@ resource "aws_iam_role" "ecs_task" {
   for_each = toset(var.environments)
 
   name               = "linkforge-ecs-task-${each.key}"
-  description        = "Application identity for LinkForge ECS tasks in ${each.key}. It has no permissions until v4-state."
+  description        = "Application identity for LinkForge ECS tasks in ${each.key}. Its only permission is the ECS Exec channel; application permissions arrive at v4-state."
   assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
 
   tags = {
     Environment = each.key
     Milestone   = "v2-fargate"
   }
+}
+
+# The task role's only permission at v2-fargate, and it is an operational one
+# rather than an application one. A Fargate task has no host to open a session
+# on, so `aws ecs execute-command` is the only way to stand inside the container
+# and ask what it sees — which is how step 4 is proved before a load balancer
+# is involved at step 5.
+#
+# It reaches ssmmessages, one of the three endpoints dev already built at
+# v1-network. No new endpoint and no new cost: the SSM host paid for this.
+#
+# Granted in all three environments because the permission alone does nothing.
+# What switches it on is enable_execute_command on the service, which the stack
+# decides per environment — and prod should say false.
+data "aws_iam_policy_document" "ecs_exec" {
+  statement {
+    sid    = "ECSExecChannels"
+    effect = "Allow"
+    actions = [
+      "ssmmessages:CreateControlChannel",
+      "ssmmessages:CreateDataChannel",
+      "ssmmessages:OpenControlChannel",
+      "ssmmessages:OpenDataChannel",
+    ]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "ecs_task_exec" {
+  for_each = aws_iam_role.ecs_task
+
+  name   = "ecs-exec"
+  role   = each.value.id
+  policy = data.aws_iam_policy_document.ecs_exec.json
 }
