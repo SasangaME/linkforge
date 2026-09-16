@@ -62,5 +62,6 @@ Each milestone introduces infrastructure only when the application needs it:
 - [ROADMAP.md](ROADMAP.md) — milestones and progress
 - [RUNBOOK.md](RUNBOOK.md) — manual setup and operational steps
 - [COST.md](COST.md) — cost assumptions and budget decisions
+- [account/README.md](account/README.md) — account-wide resources, and why they are not split by environment
 - [live/README.md](live/README.md) — environment layout and state
 - [app/README.md](app/README.md) — application details
