@@ -66,7 +66,7 @@
 | --- | --- | --- |
 | 1 | Python application stub, Dockerfile, and endpoint tests | Done |
 | 2 | ECS task roles, autoscaling service-linked role, and CI provisioning permissions | Done |
-| 3 | Shared ECR repository and lifecycle policy | Implemented; awaiting manual `account/` apply |
+| 3 | Shared ECR repository and lifecycle policy | Done |
 | 4 | ECS cluster, task definition, service, and CloudWatch logs | Not started |
 | 5 | Replace the instance target with an IP target group for ECS | Not started |
 | 6 | Service auto scaling | Not started |
@@ -82,3 +82,18 @@ The ECR repository is shared by all environments, owned by `account/`, and not
 part of nightly dev teardown. Images are built once and promoted by digest.
 Only untagged images expire until step 7 defines tags that protect every digest
 still referenced by an environment.
+
+Steps 2 and 3 are applied and not merely merged. `account/` was hand-applied on
+2026-09-16 and then read back from the services that own the resources: the
+repository and its lifecycle rule, `AWSServiceRoleForECS` created before any
+cluster existed, the six task and execution roles, and the `provisioning`
+policy's scoped `ecr:DescribeRepositories`. Operation 6 in [RUNBOOK.md](RUNBOOK.md)
+exists for that distinction, and this is the first milestone where the check ran
+before the next step rather than a day late.
+
+Step 4 also needed three more interface endpoints in `modules/network` —
+`ecr.api`, `ecr.dkr`, and `logs`. A Fargate task in a private subnet with no NAT
+gateway pulls its image and ships its logs over them, so a task that has none of
+them never leaves `PENDING` while the service itself applies cleanly. Those are
+merged and unapplied: `live/dev/network` has held zero resources since
+2026-09-14, so the next apply of that stack is the first thing that tests them.

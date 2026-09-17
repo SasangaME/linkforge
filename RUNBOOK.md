@@ -13,7 +13,7 @@ An operation in this file has three parts: the reason for it, the correct time t
 | Confirm the budget alert subscription | `v0-bootstrap` | Done, 2026-08-29 |
 | Set the plan role repository variable | `v0-bootstrap` | Done, 2026-08-29 |
 | Create the GitHub Environments | `v1-network` | `dev` done, 2026-08-29. `stage` and `prod` on promotion |
-| Apply the `account` module by hand | `v0-bootstrap` onward | Done, 2026-08-29. Re-apply pending for the shared ECR repository |
+| Apply the `account` module by hand | `v0-bootstrap` onward | Last applied 2026-09-16, for `v2-fargate` steps 2 and 3. Recurs after every merge touching `account/` |
 | Apply `stage` or `prod` from the Actions UI | `v1-network` | Not started. Blocked on the apply workflow, step 7 |
 | Remove the shared ECR repository | `v2-fargate` onward | Not started. Only on retirement |
 
@@ -355,6 +355,30 @@ rather than `false` — IAM omits the field when it is off, so the deliberate
 `hard_expiry = false` is confirmed by a missing key and its failure mode is a key
 appearing. `ExpirePasswords: true` is present and is not configured — IAM derives it
 from `max_password_age`, and it is not drift.
+
+Those three settings are applied once and then stay applied, so they stop being the
+interesting check. Each later re-apply has its own, and the check is always the same
+shape: ask the service that owns the resource, not the plan. `v2-fargate` steps 2 and 3
+added a repository, two service-linked roles and six workload roles, so the read-back
+after the 2026-09-16 apply was:
+
+```bash
+aws ecr describe-repositories --repository-names linkforge
+aws ecr get-lifecycle-policy --repository-name linkforge
+aws iam get-role --role-name AWSServiceRoleForECS --query 'Role.CreateDate'
+aws iam list-roles --query 'Roles[?starts_with(RoleName,`linkforge-ecs`)].RoleName'
+aws iam get-role-policy --role-name linkforge-gha-apply-dev --policy-name provisioning
+```
+
+The `CreateDate` on `AWSServiceRoleForECS` is the one worth reading rather than merely
+confirming present. [account/workload_roles.tf](account/workload_roles.tf) can only
+create that role if nothing has made an ECS cluster in the account first; a date earlier
+than this apply means AWS created it as a side effect and Terraform is not managing it.
+
+The last command exists because a merge can land after the apply. The `ReadTheSharedRepository`
+statement and the two new `ecs:` cluster actions merged three minutes after the
+2026-09-16 apply ran, and were present only because the apply was made from the branch.
+Read the live policy rather than the file when the two are close together in time.
 
 The roles defined in this module have no check here. A trust policy read back from IAM
 proves only that it says what it was written to say; the only thing that tests one is
